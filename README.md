@@ -13,6 +13,9 @@ python run.py
 
 Buka `http://127.0.0.1:8080`.
 
+Panduan lengkap deploy ke VPS (systemd, Nginx, HTTPS, backup, troubleshooting):
+**[DEPLOY_VPS.md](./DEPLOY_VPS.md)**.
+
 ## Menambah akun (cookie)
 
 1. Login Carousell di browser (mis. Brave/Chrome).
