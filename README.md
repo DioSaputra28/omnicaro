@@ -40,7 +40,8 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
   Posting bisa memakai rotasi proxy.
 - Job runner background + log live (SSE).
 - Posting bisa per akun atau **semua akun berurutan** (akun logout/error
-  dilewati, akun lain tetap jalan).
+  dilewati, akun lain tetap jalan) dengan **kuota berbeda per akun** — pilih
+  "Semua akun" lalu isi jumlah posting masing-masing.
 - **Jadwal**: posting otomatis pada jam tertentu (multi-jam, pilih hari),
   kuota per akun (A=10, B=5, …). Scheduler berjalan di dalam server, klaim slot
   sekali per hari (tidak dobel), toleransi telat 20 menit, dan slot terlewat

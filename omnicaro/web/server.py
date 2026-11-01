@@ -47,6 +47,7 @@ class UploadIn(BaseModel):
     fast: bool = False
     rotate: str = "account"   # off | account | listing
     proxy: str = "off"        # off | rotate
+    quotas: dict[str, int] = {}
 
 
 class UserAgentIn(BaseModel):
@@ -219,19 +220,29 @@ def start_upload(payload: UploadIn):
     rotate = payload.rotate if payload.rotate in ("off", "account", "listing") \
         else "account"
     proxy = payload.proxy if payload.proxy in ("off", "rotate") else "off"
+    valid_accounts = {a["id"] for a in db.list_accounts()}
+    quotas = {key: max(0, min(500, int(value)))
+              for key, value in (payload.quotas or {}).items()
+              if key in valid_accounts}
     common = {
         "category": payload.category,
         "limit": max(1, payload.limit),
         "fast": bool(payload.fast),
         "rotate": rotate,
         "proxy": proxy,
+        "quotas": quotas,
     }
     if payload.account_id == "__all__":
-        if not db.list_accounts():
+        if not valid_accounts:
             raise HTTPException(status_code=400, detail="belum ada akun")
+        if quotas and not any(value > 0 for value in quotas.values()):
+            raise HTTPException(status_code=400,
+                                detail="semua kuota akun bernilai 0")
         return {"id": jobs.manager.submit("upload_all", common)}
-    if not db.get_account(payload.account_id):
+    if payload.account_id not in valid_accounts:
         raise HTTPException(status_code=400, detail="akun tidak ditemukan")
+    if payload.account_id in quotas:
+        common["limit"] = max(1, quotas[payload.account_id])
     job_id = jobs.manager.submit("upload", {
         "account_id": payload.account_id, **common})
     return {"id": job_id}

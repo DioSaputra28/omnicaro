@@ -13,6 +13,7 @@ const STATE = {
   proxyTest: null,
   schedules: [],
   schedQuotaSig: "",
+  uploadQuotaSig: "",
   editingSchedule: null,
   settings: null,
   currentJob: "",
@@ -389,6 +390,41 @@ function renderAccountsSelect() {
       `${a.label}${a.nickname ? ` — @${a.nickname}` : ""}`));
   }
   if (prev) sel.value = prev;
+  toggleUploadQuota();
+}
+
+function uploadAllMode() {
+  return $("#upload-account").value === "__all__";
+}
+
+function renderUploadQuotas() {
+  const box = $("#upload-quotas");
+  const sig = (STATE.accounts || []).map((a) => a.id).join(",");
+  if (sig === STATE.uploadQuotaSig) return;
+  const prev = {};
+  $$("#upload-quotas input[data-account]").forEach((inp) => {
+    prev[inp.dataset.account] = inp.value;
+  });
+  STATE.uploadQuotaSig = sig;
+  box.innerHTML = "";
+  for (const a of STATE.accounts || []) {
+    box.append(el("label", { class: "quota-item" }, [
+      el("span", { class: "quota-name" },
+        `${a.label}${a.nickname ? ` (@${a.nickname})` : ""}`),
+      el("input", {
+        type: "number", min: "0", max: "500",
+        value: String(prev[a.id] ?? 10), "data-account": a.id,
+      }),
+      el("span", { class: "micro" }, "posting"),
+    ]));
+  }
+}
+
+function toggleUploadQuota() {
+  const all = uploadAllMode();
+  $("#upload-limit-field").hidden = all;
+  $("#upload-quota-field").hidden = !all;
+  if (all) renderUploadQuotas();
 }
 
 function renderJobs() {
@@ -765,7 +801,8 @@ function renderScheduleQuotas(quotas = []) {
   for (const q of quotas) map[q.account_id] = q.limit;
   for (const a of accounts) {
     box.append(el("label", { class: "quota-item" }, [
-      el("span", { class: "quota-name" }, a.label),
+      el("span", { class: "quota-name" },
+        `${a.label}${a.nickname ? ` (@${a.nickname})` : ""}`),
       el("input", {
         type: "number", min: "0", max: "500",
         value: String(map[a.id] ?? 0), "data-account": a.id,
@@ -1263,10 +1300,12 @@ $("#scrape-form").addEventListener("submit", async (e) => {
   }
 });
 
-$("#upload-account").addEventListener("change", (e) => {
-  const all = e.target.value === "__all__";
-  const label = document.querySelector('label[for="upload-limit"]');
-  if (label) label.textContent = all ? "Jumlah posting / akun" : "Jumlah posting";
+$("#upload-account").addEventListener("change", () => {
+  toggleUploadQuota();
+  if (!uploadAllMode()) {
+    const label = document.querySelector('label[for="upload-limit"]');
+    if (label) label.textContent = "Jumlah posting";
+  }
 });
 
 $("#upload-form").addEventListener("submit", async (e) => {
@@ -1278,13 +1317,26 @@ $("#upload-form").addEventListener("submit", async (e) => {
   const fast = $("#upload-fast").checked;
   const rotate = $("#upload-rotate").value;
   const proxy = $("#upload-proxy").value;
+  const all = account_id === "__all__";
+  let quotas = {};
+  if (all) {
+    $$("#upload-quotas input[data-account]").forEach((inp) => {
+      const value = Number(inp.value) || 0;
+      if (value > 0) quotas[inp.dataset.account] = value;
+    });
+    if (!Object.keys(quotas).length) {
+      return msg(note, "Isi kuota minimal satu akun.", "error");
+    }
+  }
   if (!account_id) return msg(note, "Pilih akun dulu.", "error");
-  msg(note, account_id === "__all__"
-    ? "Job semua akun dikirim…" : "Job posting dikirim…");
+  msg(note, all ? "Job semua akun dikirim…" : "Job posting dikirim…");
   try {
     const { id } = await api("/api/jobs/upload", {
       method: "POST",
-      body: JSON.stringify({ account_id, category, limit, fast, rotate, proxy }),
+      body: JSON.stringify({
+        account_id, category, limit, fast, rotate, proxy,
+        quotas: all ? quotas : {},
+      }),
     });
     msg(note, `Job ${id} berjalan.`, "ok");
     openJob(id);

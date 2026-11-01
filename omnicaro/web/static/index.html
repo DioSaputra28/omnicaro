@@ -686,9 +686,13 @@
               <label for="upload-category">Kategori</label>
               <select id="upload-category"><option value="">Semua kategori</option></select>
             </div>
-            <div class="field field-narrow">
+            <div class="field field-narrow" id="upload-limit-field">
               <label for="upload-limit">Jumlah posting</label>
               <input id="upload-limit" type="number" min="1" max="500" value="10">
+            </div>
+            <div class="field field-grow" id="upload-quota-field" hidden>
+              <label>Kuota per akun</label>
+              <div class="quota-grid" id="upload-quotas"></div>
             </div>
             <div class="field field-check">
               <label class="check-inline" for="upload-fast">
