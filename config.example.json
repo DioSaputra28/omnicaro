@@ -1,0 +1,63 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "browser": {
+    "executable": "",
+    "headless": true
+  },
+  "scrape": {
+    "base_url": "https://www.carousell.com.my",
+    "max_photos": 3,
+    "delay_ms": 300,
+    "categories": {
+      "atasan_cowo": {
+        "label": "Atasan Cowo",
+        "url": "https://www.carousell.com.my/categories/men-s-fashion-3/tops-sets-1848/"
+      },
+      "bawahan_cowo": {
+        "label": "Bawahan Cowo",
+        "url": "https://www.carousell.com.my/categories/men-s-fashion-3/bottoms-1849/"
+      },
+      "atasan_cewe": {
+        "label": "Atasan Cewe",
+        "url": "https://www.carousell.com.my/categories/women-s-fashion-4/tops-1261/"
+      },
+      "bawahan_cewe": {
+        "label": "Bawahan Cewe",
+        "url": "https://www.carousell.com.my/categories/women-s-fashion-4/bottoms-1262/"
+      }
+    }
+  },
+  "upload": {
+    "target": "https://id.carousell.com",
+    "price_min": 40000,
+    "price_max": 60000,
+    "price_step": 1000,
+    "condition": "Digunakan dengan baik",
+    "delay_min": 8,
+    "delay_max": 20,
+    "description": "barang second\nkondisi sesuai foto & deskripsi\nnego lewat 🆂hope\nsiapa cepat dia dapat\nyang minat langsung checkout oren\ntanya tanya bisa lewat 🆂hope aja\nlebih resposif di sana\nl!nk cek bio\ndetail barang + opsi pengiriman ada disitu",
+    "delivery": "check out here: https://s.shopee.co.id/BTOWco76c",
+    "size_search": {
+      "atasan_cowo": "Fesyen Pria",
+      "bawahan_cowo": "Fesyen Pria",
+      "atasan_cewe": "Fesyen Wanita",
+      "bawahan_cewe": "Fesyen Wanita"
+    },
+    "size_leaf": {
+      "atasan_cowo": "Atasan",
+      "bawahan_cowo": "Bawahan",
+      "atasan_cewe": "Atasan",
+      "bawahan_cewe": "Bawahan"
+    },
+    "condition_map": {
+      "Well used": "Digunakan dengan baik",
+      "Like new": "Seperti baru",
+      "Brand new": "Barang baru",
+      "Lightly used": "Tidak terlalu sering digunakan",
+      "Heavily used": "Sering digunakan"
+    }
+  }
+}

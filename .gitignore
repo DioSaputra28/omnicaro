@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data (cookie akun, DB, gambar, log job)
+data/
+*.log
+
+# Config lokal (dibuat otomatis dari config.example.json)
+config.json
