@@ -233,6 +233,7 @@ class JobManager:
                 import random
                 rng = random.Random(f"{account_id}-{time.time()}")
                 blocked = False
+                logged_out = False
                 for idx, item in enumerate(items):
                     if rotate == "listing" and idx > 0:
                         _close_quietly(ctx)
@@ -258,6 +259,13 @@ class JobManager:
                                    price=str(info.get("price", "")),
                                    size=str(info.get("size", "")),
                                    url_after=info.get("url", ""))
+                    if status == "logout":
+                        logged_out = True
+                        db.update_account_status(account_id, "logout")
+                        db.record_login_event(account_id, False)
+                        log("  akun LOGOUT di tengah proses —"
+                            " sisa listing dilewati")
+                        break
                     if status == "blocked":
                         blocked = True
                         db.update_account_status(account_id, "blocked")
@@ -279,10 +287,13 @@ class JobManager:
                     br.close()
                 except Exception:
                     pass
+        skipped_reason = "cloudflare" if blocked else (
+            "logout" if logged_out else "")
+        summary = ("akun gugur (Cloudflare)" if blocked else
+                   "akun logout di tengah proses" if logged_out else
+                   f"posted {posted}, gagal {failed}")
         return {"posted": posted, "failed": failed,
-                "skipped": "cloudflare" if blocked else "",
-                "summary": ("akun gugur (Cloudflare)"
-                            if blocked else f"posted {posted}, gagal {failed}")}
+                "skipped": skipped_reason, "summary": summary}
 
     def _run_check_account(self, params: dict, log) -> str:
         account = db.get_account(params.get("account_id", ""))

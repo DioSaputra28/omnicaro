@@ -89,6 +89,21 @@ def sanitize_delivery(text: str) -> str:
     return (text or "").strip() or SAFE_DELIVERY
 
 
+def is_logged_out(page) -> bool:
+    """Deteksi sesi logout di tengah proses (redirect /login atau tombol Masuk)."""
+    try:
+        url = (page.url or "").lower()
+        if "/login" in url or "/signup" in url or "/masuk" in url:
+            return True
+        if page.query_selector('a[href*="login"], a[href*="signup"]'):
+            return True
+        body = (page.inner_text("body") or "").lower()[:1200]
+        return ("masuk" in body and "daftar" in body
+                and "keluar" not in body and "logout" not in body)
+    except Exception:
+        return False
+
+
 def select_category(page, search: str, leaf: str, fast: bool = False) -> bool:
     """Buka modal kategori (ID/EN), cari leaf, pilih yang induknya cocok."""
     opened = False
@@ -388,6 +403,9 @@ def post_one(page, listing: dict, cfg: dict, rng: random.Random,
 
     page.goto(target + "/sell/", wait_until="domcontentloaded", timeout=60000)
     _sleep(page, 2000, fast)
+    if is_logged_out(page):
+        return "logout", {"stage": "logout",
+                          "err": "akun logout saat membuka halaman jual"}
     if is_challenge(page):
         return "blocked", {"stage": "blocked",
                            "err": "Cloudflare challenge di halaman jual"}
@@ -401,6 +419,9 @@ def post_one(page, listing: dict, cfg: dict, rng: random.Random,
     _sleep(page, 2500, fast)
 
     if not select_category(page, search, leaf, fast):
+        if is_logged_out(page):
+            return "logout", {"stage": "logout",
+                              "err": "akun logout saat pilih kategori"}
         stage = "blocked" if is_challenge(page) else "kategori"
         return "error" if stage == "kategori" else "blocked", {
             "stage": stage,
@@ -428,6 +449,9 @@ def post_one(page, listing: dict, cfg: dict, rng: random.Random,
                 continue
         ok_price = fill_price(page, str(price))
     if not (ok_title or ok_price or ok_desc):
+        if is_logged_out(page):
+            return "logout", {"stage": "logout",
+                              "err": "akun logout saat mengisi form"}
         body = ""
         try:
             body = (page.inner_text("body") or "")[:400]
@@ -466,6 +490,10 @@ def post_one(page, listing: dict, cfg: dict, rng: random.Random,
         ok = _posted_ok(page)
 
     if not ok:
+        if is_logged_out(page):
+            return "logout", {"stage": "logout", "price": price,
+                              "size": size,
+                              "err": "akun logout saat submit"}
         if is_challenge(page):
             return "blocked", {"stage": "blocked", "price": price,
                                "size": size,

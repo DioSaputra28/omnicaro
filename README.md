@@ -78,6 +78,9 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
   CLI (`upload.py`): `🆂hope` / `l!nk` dan link `s.shopee.co.id`. Ada pratinjau
   live hasil filter (baris "shopee"/"link" polos dibuang, versi obfuscated
   tetap lolos), serta tabel pemetaan kategori.
+- **Logout di tengah proses**: kalau sesi akun mati saat posting, akun ditandai
+  `logout`, listing yang sedang diproses gagal, sisa listing dilewati, dan run
+  lanjut ke akun berikutnya.
 - Cek login per akun dan rekap status.
 - Konfigurasi di `config.json` (kategori, harga, deskripsi, selector kategori).
 
