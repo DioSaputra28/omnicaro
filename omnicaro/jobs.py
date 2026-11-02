@@ -21,6 +21,19 @@ def _close_quietly(obj) -> None:
         pass
 
 
+def _current_ip(page, timeout_ms: int = 6000) -> str:
+    """IP keluar yang sedang dipakai context (mendukung proxy rotating)."""
+    try:
+        resp = page.context.request.get(
+            "https://api.ipify.org?format=json", timeout=timeout_ms)
+        if resp.ok:
+            data = resp.json()
+            return str(data.get("ip", "") or "")
+    except Exception:
+        pass
+    return ""
+
+
 class JobManager:
     def __init__(self) -> None:
         self._q: queue.Queue[tuple[str, str, dict, Path]] = queue.Queue()
@@ -247,6 +260,9 @@ class JobManager:
                             log(f"  proxy ganti: {proxy_row['label']}"
                                 f" ({proxy_row['server']},"
                                 f" dipakai {proxy_row['use_count']}x)")
+                    ip = _current_ip(page)
+                    via = proxy_row["label"] if proxy_row else "langsung"
+                    log(f"  IP: {ip or 'tidak terdeteksi'} ({via})")
                     log(f"[{idx+1}/{len(items)}] {item['id']} {item['title'][:50]}")
                     try:
                         status, info = uploader.post_one(page, item, cfg, rng,

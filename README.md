@@ -81,6 +81,9 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
 - **Logout di tengah proses**: kalau sesi akun mati saat posting, akun ditandai
   `logout`, listing yang sedang diproses gagal, sisa listing dilewati, dan run
   lanjut ke akun berikutnya.
+- **Proxy rotating provider**: tambahkan endpoint HTTP rotating (dengan auth)
+  seperti proxy biasa; IP keluar bisa berubah tiap request. Log posting
+  menampilkan `IP: x.x.x.x (<label proxy / langsung>)` per listing.
 - Cek login per akun dan rekap status.
 - Konfigurasi di `config.json` (kategori, harga, deskripsi, selector kategori).
 
