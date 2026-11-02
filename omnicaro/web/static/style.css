@@ -737,6 +737,7 @@ input[type="checkbox"] {
 }
 .dock-dot.is-run { background: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .dock-dot.is-ok { background: var(--success-strong); }
+.dock-dot.is-warn { background: var(--warning-soft); }
 .dock-dot.is-bad { background: var(--danger-soft); }
 .dock-actions { display: flex; gap: 6px; }
 

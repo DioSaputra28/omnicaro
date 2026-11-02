@@ -40,17 +40,38 @@ class JobManager:
         self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
         self._current: str = ""
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._active_cancel: threading.Event | None = None
 
     # ---------- API ----------
 
     def submit(self, kind: str, params: dict) -> str:
         job_id, log_file = db.create_job(kind, params)
+        with self._lock:
+            self._cancel_events[job_id] = threading.Event()
         self._q.put((job_id, kind, params, Path(log_file)))
         self._ensure_worker()
         return job_id
 
     def current(self) -> str:
         return self._current
+
+    def cancel(self, job_id: str) -> bool:
+        """Minta job berhenti. Running: antar item. Queued: langsung batal."""
+        with self._lock:
+            event = self._cancel_events.get(job_id)
+            if event is not None:
+                event.set()
+                return True
+        job = db.get_job(job_id)
+        if job and job.get("status") in ("queued", "running"):
+            db.update_job(job_id, "cancelled")
+            return True
+        return False
+
+    def _is_cancelled(self) -> bool:
+        event = self._active_cancel
+        return bool(event and event.is_set())
 
     # ---------- internals ----------
 
@@ -65,7 +86,19 @@ class JobManager:
     def _loop(self) -> None:
         while True:
             job_id, kind, params, log_file = self._q.get()
+            event = self._cancel_events.get(job_id) or threading.Event()
+            self._active_cancel = event
             self._current = job_id
+
+            if event.is_set():
+                db.update_job(job_id, "cancelled")
+                self._active_cancel = None
+                self._current = ""
+                with self._lock:
+                    self._cancel_events.pop(job_id, None)
+                self._q.task_done()
+                continue
+
             db.update_job(job_id, "running")
             writer = _LogWriter(log_file)
 
@@ -84,15 +117,22 @@ class JobManager:
                 if not handler:
                     raise ValueError(f"jenis job tidak dikenal: {kind}")
                 result = handler(params, log)
-                log(f"selesai: {result}")
-                db.update_job(job_id, "done")
+                if event.is_set():
+                    log("job DIBATALKAN oleh user")
+                    db.update_job(job_id, "cancelled")
+                else:
+                    log(f"selesai: {result}")
+                    db.update_job(job_id, "done")
             except Exception as e:
                 log(f"ERROR: {e}")
                 log(traceback.format_exc())
                 db.update_job(job_id, "error")
             finally:
                 writer.close()
+                self._active_cancel = None
                 self._current = ""
+                with self._lock:
+                    self._cancel_events.pop(job_id, None)
                 self._q.task_done()
 
     # ---------- handlers ----------
@@ -104,6 +144,9 @@ class JobManager:
             raise ValueError("pilih minimal 1 kategori")
         total = 0
         for cat in categories:
+            if self._is_cancelled():
+                log("dibatalkan: sisa kategori tidak diproses")
+                break
             total += scraper.scrape_category(cat, limit, log)
         return f"{total} listing baru"
 
@@ -116,6 +159,9 @@ class JobManager:
         if account.get("status") == "blocked":
             log("akun ditandai GUGUR (Cloudflare), dilewati")
             return "akun gugur (Cloudflare), dilewati"
+        if self._is_cancelled():
+            log("dibatalkan sebelum mulai")
+            return "dibatalkan"
         if params.get("category") == "__account__":
             one = dict(params)
             one["category"] = account.get("niche") or ""
@@ -138,6 +184,9 @@ class JobManager:
         total_posted = total_failed = 0
         done = skipped = 0
         for idx, acc in enumerate(accounts, 1):
+            if self._is_cancelled():
+                log("dibatalkan: sisa akun tidak diproses")
+                break
             full = db.get_account(acc["id"])
             if not full:
                 continue
@@ -248,6 +297,9 @@ class JobManager:
                 blocked = False
                 logged_out = False
                 for idx, item in enumerate(items):
+                    if self._is_cancelled():
+                        log("dibatalkan: sisa listing tidak diubah")
+                        break
                     if rotate == "listing" and idx > 0:
                         _close_quietly(ctx)
                         ctx, ua_row, proxy_row = open_ctx(br)
@@ -334,6 +386,9 @@ class JobManager:
     def _run_check_all(self, params: dict, log) -> str:
         accounts = db.list_accounts()
         for acc in accounts:
+            if self._is_cancelled():
+                log("dibatalkan: sisa akun tidak dicek")
+                break
             full = db.get_account(acc["id"])
             if not full:
                 continue

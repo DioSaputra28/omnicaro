@@ -547,6 +547,14 @@ def job_log(job_id: str, offset: int = 0):
     return {"text": text, "offset": new_offset, "status": job.get("status", "")}
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    if not jobs.manager.cancel(job_id):
+        raise HTTPException(status_code=404,
+                            detail="job tidak ditemukan atau sudah selesai")
+    return {"ok": True}
+
+
 @app.get("/api/jobs/{job_id}/stream")
 async def job_stream(job_id: str):
     async def gen():
@@ -559,7 +567,7 @@ async def job_stream(job_id: str):
                 yield "data: " + json.dumps({"text": text}) + "\n\n"
             job = await run_in_threadpool(db.get_job, job_id)
             status = (job or {}).get("status", "")
-            if status in ("done", "error"):
+            if status in ("done", "error", "cancelled"):
                 text, offset = await run_in_threadpool(jobs.tail, job_id, offset)
                 if text:
                     yield "data: " + json.dumps({"text": text}) + "\n\n"

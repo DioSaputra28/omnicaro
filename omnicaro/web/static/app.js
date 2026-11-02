@@ -106,6 +106,7 @@ function listingBadge(status) {
 function jobBadge(status) {
   if (status === "done") return badge("selesai", "ok");
   if (status === "error") return badge("gagal", "bad");
+  if (status === "cancelled") return badge("dibatalkan", "warn");
   if (status === "running") return badge("berjalan", "run");
   return badge(status || "queued", "neutral");
 }
@@ -440,6 +441,12 @@ function renderJobs() {
       el("td", { class: "num" }, timeShort(j.started_at || j.created_at)),
       el("td", {}, [
         el("div", { class: "row-actions" }, [
+          j.status === "running"
+            ? el("button", {
+                class: "btn btn-mini btn-danger", type: "button",
+                onclick: () => cancelJob(j.id),
+              }, "Batal")
+            : null,
           el("button", {
             class: "btn btn-mini", type: "button",
             onclick: () => openJob(j.id),
@@ -1351,6 +1358,7 @@ const dock = $("#log-dock");
 const dockLog = $("#dock-log");
 const dockDot = $("#dock-dot");
 const dockJob = $("#dock-job");
+let streamJob = "";
 let dockHeight = Number(localStorage.getItem("omnicaro.dockH")) || 240;
 let dockDrag = null;
 
@@ -1385,6 +1393,7 @@ function appendLog(text) {
 function openJob(jobId) {
   if (stream) stream.close();
   setDockOpen(true);
+  streamJob = jobId;
   dockLog.textContent = "";
   const qlog = $("#log");
   if (qlog) qlog.textContent = "";
@@ -1392,6 +1401,10 @@ function openJob(jobId) {
   const qtitle = $("#log-title");
   if (qtitle) qtitle.textContent = `job ${jobId}`;
   dockDot.className = "dock-dot is-run";
+  const cancelBtn = $("#dock-cancel");
+  cancelBtn.hidden = false;
+  cancelBtn.disabled = false;
+  cancelBtn.textContent = "Batal";
 
   stream = new EventSource(`/api/jobs/${jobId}/stream`);
   stream.onmessage = (ev) => {
@@ -1401,7 +1414,10 @@ function openJob(jobId) {
       const status = String(data.status);
       dockJob.textContent = `job ${jobId} · ${status}`;
       dockDot.className = "dock-dot "
-        + (status === "done" ? "is-ok" : status === "error" ? "is-bad" : "");
+        + (status === "done" ? "is-ok" : status === "error" ? "is-bad"
+          : status === "cancelled" ? "is-warn" : "");
+      cancelBtn.hidden = true;
+      streamJob = "";
       if (stream) stream.close();
       stream = null;
       refresh().catch(() => {});
@@ -1412,6 +1428,30 @@ function openJob(jobId) {
     stream = null;
   };
 }
+
+async function cancelJob(jobId) {
+  try {
+    await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+    toast("Permintaan batal dikirim. Job berhenti setelah item berjalan.", "ok");
+    return true;
+  } catch (err) {
+    toast(err.message, "err");
+    return false;
+  }
+}
+
+$("#dock-cancel").addEventListener("click", async () => {
+  if (!streamJob) return;
+  const btn = $("#dock-cancel");
+  const jobId = streamJob;
+  btn.disabled = true;
+  btn.textContent = "Membatalkan…";
+  const ok = await cancelJob(jobId);
+  if (!ok) {
+    btn.disabled = false;
+    btn.textContent = "Batal";
+  }
+});
 
 $("#log-follow").addEventListener("click", () => {
   const log = $("#log");
