@@ -1328,10 +1328,9 @@ $("#upload-form").addEventListener("submit", async (e) => {
   let quotas = {};
   if (all) {
     $$("#upload-quotas input[data-account]").forEach((inp) => {
-      const value = Number(inp.value) || 0;
-      if (value > 0) quotas[inp.dataset.account] = value;
+      quotas[inp.dataset.account] = Math.max(0, Number(inp.value) || 0);
     });
-    if (!Object.keys(quotas).length) {
+    if (!Object.values(quotas).some((value) => value > 0)) {
       return msg(note, "Isi kuota minimal satu akun.", "error");
     }
   }
@@ -1394,6 +1393,7 @@ function openJob(jobId) {
   if (stream) stream.close();
   setDockOpen(true);
   streamJob = jobId;
+  try { localStorage.setItem("omnicaro.lastJob", jobId); } catch (e) {}
   dockLog.textContent = "";
   const qlog = $("#log");
   if (qlog) qlog.textContent = "";
@@ -1514,7 +1514,13 @@ if (!bootView) {
 setView(bootView || "dashboard");
 
 refresh().then(() => {
-  if (STATE.currentJob && !stream) openJob(STATE.currentJob);
+  if (STATE.currentJob && !stream) {
+    openJob(STATE.currentJob);
+    return;
+  }
+  let lastJob = "";
+  try { lastJob = localStorage.getItem("omnicaro.lastJob") || ""; } catch (e) {}
+  if (lastJob && !stream) openJob(lastJob);
 }).catch((err) => {
   console.error(err);
   $("#browser-mode").textContent = "state gagal dimuat";

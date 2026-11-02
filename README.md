@@ -41,7 +41,7 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
 - Job runner background + log live (SSE).
 - Posting bisa per akun atau **semua akun berurutan** (akun logout/error
   dilewati, akun lain tetap jalan) dengan **kuota berbeda per akun** — pilih
-  "Semua akun" lalu isi jumlah posting masing-masing.
+  "Semua akun" lalu isi jumlah posting masing-masing; **0 = akun dilewati**.
 - **Jadwal**: posting otomatis pada jam tertentu (multi-jam, pilih hari),
   kuota per akun (A=10, B=5, …). Scheduler berjalan di dalam server, klaim slot
   sekali per hari (tidak dobel), toleransi telat 20 menit, dan slot terlewat
@@ -72,7 +72,9 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
   dipakai lagi sampai "Cek login" menunjukkan login valid.
 - **Log dock footer** seperti terminal VS Code: muncul otomatis saat scrape/
   posting dari halaman mana pun, bisa ditarik naik-turun (tinggi diingat),
-  dikecilkan, dibersihkan, dan tombol "Progres" untuk buka antrean.
+  dikecilkan, dibersihkan, dan tombol "Progres" untuk buka antrean. Tab baru
+  mengikuti job yang sedang jalan; setelah tab ditutup/dibuka lagi, log job
+  terakhir yang dilihat dipulihkan.
 - **Halaman Pengaturan**: atur deskripsi, link Shopee di opsi pengiriman,
   harga min/max/kelipatan, dan kondisi. Default-nya mengikuti template project
   CLI (`upload.py`): `🆂hope` / `l!nk` dan link `s.shopee.co.id`. Ada pratinjau

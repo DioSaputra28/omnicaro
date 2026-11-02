@@ -242,7 +242,11 @@ def start_upload(payload: UploadIn):
     if payload.account_id not in valid_accounts:
         raise HTTPException(status_code=400, detail="akun tidak ditemukan")
     if payload.account_id in quotas:
-        common["limit"] = max(1, quotas[payload.account_id])
+        quota = quotas[payload.account_id]
+        if quota <= 0:
+            raise HTTPException(status_code=400,
+                                detail="kuota akun ini 0")
+        common["limit"] = max(1, quota)
     job_id = jobs.manager.submit("upload", {
         "account_id": payload.account_id, **common})
     return {"id": job_id}
@@ -566,6 +570,9 @@ async def job_stream(job_id: str):
                 idle = 0
                 yield "data: " + json.dumps({"text": text}) + "\n\n"
             job = await run_in_threadpool(db.get_job, job_id)
+            if not job:
+                yield "data: " + json.dumps({"status": "error"}) + "\n\n"
+                break
             status = (job or {}).get("status", "")
             if status in ("done", "error", "cancelled"):
                 text, offset = await run_in_threadpool(jobs.tail, job_id, offset)
