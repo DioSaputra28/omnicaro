@@ -43,8 +43,8 @@ class Scheduler:
             if sched["days"] and weekday not in sched["days"]:
                 continue
             quotas = {q["account_id"]: int(q["limit"])
-                      for q in sched["quotas"] if int(q["limit"]) > 0}
-            if not quotas:
+                      for q in sched["quotas"]}
+            if not any(value > 0 for value in quotas.values()):
                 continue
             for slot in sched["times"]:
                 try:

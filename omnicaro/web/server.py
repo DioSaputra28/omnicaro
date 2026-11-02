@@ -368,12 +368,10 @@ def _clean_schedule(payload: ScheduleIn, existing: dict | None = None) -> dict:
     for q in payload.quotas:
         if q.account_id not in valid_accounts or q.account_id in seen:
             continue
-        limit = max(0, int(q.limit))
-        if limit <= 0:
-            continue
+        limit = max(0, min(500, int(q.limit)))
         seen.add(q.account_id)
         quotas.append({"account_id": q.account_id, "limit": limit})
-    if not quotas:
+    if not any(q["limit"] > 0 for q in quotas):
         raise HTTPException(status_code=400,
                             detail="isi kuota minimal satu akun")
 

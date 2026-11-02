@@ -995,9 +995,9 @@ $("#sched-form").addEventListener("submit", async (e) => {
   const times = $("#sched-times").value.split(",")
     .map((s) => s.trim()).filter(Boolean);
   const days = $$("#sched-days input:checked").map((i) => Number(i.value));
-  const quotas = currentQuotaValues().filter((q) => q.limit > 0);
+  const quotas = currentQuotaValues();
   if (!times.length) return msg(note, "Isi minimal satu jam.", "error");
-  if (!quotas.length) {
+  if (!quotas.some((q) => q.limit > 0)) {
     return msg(note, "Isi kuota minimal satu akun.", "error");
   }
   const payload = {
