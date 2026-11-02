@@ -850,3 +850,35 @@ body.dock-open .main { padding-bottom: calc(var(--dock-h, 240px) + 64px); }
 }
 
 :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }
+
+/* ---------- mode switch (arah marketplace) ---------- */
+.mode-switch {
+  display: flex;
+  gap: 4px;
+  margin: 0 6px 6px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.mode-btn {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 6px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.mode-btn:hover { color: var(--text); background: var(--surface-3); }
+.mode-btn.is-active { background: var(--primary); color: #fff; }
+.mode-note {
+  margin: 0 6px 14px;
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: center;
+}

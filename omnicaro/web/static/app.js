@@ -16,6 +16,12 @@ const STATE = {
   uploadQuotaSig: "",
   editingSchedule: null,
   settings: null,
+  identityAccount: null,
+  mode: "my_to_id",
+  target: "id",
+  modeLabel: "",
+  modes: {},
+  marketLabels: { id: "Indonesia", my: "Malaysia" },
   currentJob: "",
   filter: "all",
   search: "",
@@ -111,6 +117,54 @@ function jobBadge(status) {
   return badge(status || "queued", "neutral");
 }
 
+function marketBadge(market) {
+  const key = market === "my" ? "my" : "id";
+  return badge(key.toUpperCase(), "neutral");
+}
+
+function modeTarget(mode) {
+  return mode === "id_to_my" ? "my" : "id";
+}
+
+function accountForTarget() {
+  return (STATE.accounts || []).filter(
+    (a) => a.enabled && (a.marketplace || "id") === STATE.target);
+}
+
+function renderMode() {
+  $$(".mode-btn").forEach((btn) => btn.classList.toggle(
+    "is-active", btn.dataset.mode === STATE.mode));
+  $("#mode-note").textContent = STATE.modeLabel || STATE.mode;
+  const source = STATE.target === "id" ? "Malaysia" : "Indonesia";
+  const dest = STATE.target === "id" ? "Indonesia" : "Malaysia";
+  $("#scrape-lede").textContent =
+    `Scrape listing baru dari Carousell ${source}. Item yang sudah ada dilewati otomatis.`;
+  $("#upload-target-note").textContent = `target: ${dest}`;
+}
+
+$$(".mode-btn").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    if (btn.dataset.mode === STATE.mode || btn.disabled) return;
+    $$(".mode-btn").forEach((b) => { b.disabled = true; });
+    try {
+      await api("/api/mode", {
+        method: "PUT",
+        body: JSON.stringify({ mode: btn.dataset.mode }),
+      });
+      STATE.uploadQuotaSig = "";
+      STATE.schedQuotaSig = "";
+      await refresh();
+      if (STATE.view === "settings") await loadSettings();
+      resetScheduleForm();
+      toast(`Mode: ${STATE.modeLabel}`, "ok");
+    } catch (err) {
+      toast(err.message, "err");
+    } finally {
+      $$(".mode-btn").forEach((b) => { b.disabled = false; });
+    }
+  });
+});
+
 /* ---------- views ---------- */
 
 const VIEWS = ["dashboard", "accounts", "catalog", "agents", "proxies",
@@ -154,7 +208,7 @@ $$("[data-goto]").forEach((btn) => {
 function renderDashboard() {
   const a = STATE.accounts;
   const c = STATE.counts || {};
-  const active = a.filter((x) => x.status === "login").length;
+  const active = a.filter((x) => x.status === "login" && x.enabled).length;
   const total = c.listings || 0;
   const posted = c.posted || 0;
   const failed = c.failed || 0;
@@ -180,13 +234,14 @@ function renderDashboard() {
     STATE.browser && STATE.browser.headless ? "headless" : "tampil";
 
   $("#a-total").textContent = a.length;
-  $("#a-login").textContent = a.filter((x) => x.status === "login").length;
+  $("#a-login").textContent =
+    a.filter((x) => x.status === "login" && x.enabled).length;
   $("#a-logout").textContent = a.filter((x) => x.status === "logout").length;
   $("#a-unknown").textContent = a.filter((x) => x.status === "unknown").length;
 
   const activeBox = $("#dashboard-accounts");
   activeBox.innerHTML = "";
-  const shown = a.filter((x) => x.status === "login").slice(0, 5);
+  const shown = a.filter((x) => x.status === "login" && x.enabled).slice(0, 5);
   $("#dashboard-accounts-empty").hidden = shown.length > 0;
   for (const acc of shown) {
     activeBox.append(el("li", {}, [
@@ -243,17 +298,78 @@ function accountNicheSelect(a) {
   return sel;
 }
 
+function openIdentity(account) {
+  STATE.identityAccount = account;
+  $("#identity-account").textContent =
+    `${account.label}${account.nickname ? ` — @${account.nickname}` : ""}`;
+  $("#identity-marketplace").value = account.marketplace || "id";
+  const proxySel = $("#identity-proxy");
+  proxySel.innerHTML = "";
+  proxySel.append(el("option", { value: "" }, "— ikut rotasi / mati —"));
+  for (const proxy of STATE.proxies || []) {
+    if (!proxy.enabled && proxy.id !== account.proxy_id) continue;
+    proxySel.append(el("option", { value: proxy.id },
+      `${proxy.label} · ${proxy.server}`
+      + (proxy.status === "ok" ? " · hidup" : "")));
+  }
+  proxySel.value = account.proxy_id || "";
+  const uaSel = $("#identity-ua");
+  uaSel.innerHTML = "";
+  uaSel.append(el("option", { value: "" }, "— ikut rotasi / default —"));
+  for (const ua of STATE.userAgents || []) {
+    if (!ua.enabled && ua.id !== account.user_agent_id) continue;
+    uaSel.append(el("option", { value: ua.id }, ua.label));
+  }
+  uaSel.value = account.user_agent_id || "";
+  msg($("#identity-msg"), "");
+  $("#identity-modal").hidden = false;
+}
+
+function closeIdentity() {
+  $("#identity-modal").hidden = true;
+  STATE.identityAccount = null;
+}
+
+$("#close-identity").addEventListener("click", closeIdentity);
+$("#cancel-identity").addEventListener("click", closeIdentity);
+$("#identity-modal").addEventListener("click", (e) => {
+  if (e.target.id === "identity-modal") closeIdentity();
+});
+
+$("#save-identity").addEventListener("click", async () => {
+  const account = STATE.identityAccount;
+  if (!account) return;
+  const note = $("#identity-msg");
+  msg(note, "Menyimpan…");
+  try {
+    await api(`/api/accounts/${account.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        proxy_id: $("#identity-proxy").value,
+        user_agent_id: $("#identity-ua").value,
+        marketplace: $("#identity-marketplace").value,
+      }),
+    });
+    toast("Identitas akun disimpan.", "ok");
+    closeIdentity();
+    await refresh();
+  } catch (err) {
+    msg(note, err.message, "error");
+  }
+});
+
 function renderAccounts() {
   const body = $("#accounts-body");
   body.innerHTML = "";
   const q = STATE.search.toLowerCase();
   const rows = STATE.accounts.filter((a) => {
     const matchStatus = STATE.filter === "all"
-      || (STATE.filter === "login" && a.status === "login")
+      || (STATE.filter === "login" && a.status === "login" && a.enabled)
       || (STATE.filter === "logout" && a.status === "logout")
       || (STATE.filter === "blocked" && a.status === "blocked")
       || (STATE.filter === "unknown" && a.status === "unknown");
-    const blob = `${a.label} ${a.nickname || ""} ${a.id}`.toLowerCase();
+    const blob = `${a.label} ${a.nickname || ""} ${a.id}`
+      .toLowerCase();
     return matchStatus && (!q || blob.includes(q));
   });
   $("#accounts-empty").hidden = rows.length > 0;
@@ -271,13 +387,26 @@ function renderAccounts() {
         ]),
       ]),
       el("td", {}, [accountNicheSelect(a)]),
-      el("td", {}, [accountBadge(a.status)]),
+      el("td", {}, [
+        marketBadge(a.marketplace),
+        " ",
+        accountBadge(a.status),
+        a.enabled ? null : [" ", el("span", { class: "micro" }, "nonaktif")],
+      ]),
       el("td", {}, a.status === "login" && a.nickname
         ? `@${a.nickname}` : "—"),
       el("td", { class: "num" }, timeShort(a.last_check)),
       el("td", { class: "num" }, stats.open ? `${stats.open}` : "—"),
       el("td", {}, [
         el("div", { class: "row-actions" }, [
+          el("button", {
+            class: "btn btn-mini", type: "button",
+            onclick: () => openIdentity(a),
+          }, "Identitas"),
+          el("button", {
+            class: "btn btn-mini", type: "button",
+            onclick: () => toggleAccount(a),
+          }, a.enabled ? "Nonaktifkan" : "Aktifkan"),
           el("button", {
             class: "btn btn-mini", type: "button",
             onclick: () => checkAccount(a.id),
@@ -350,9 +479,14 @@ function listingRow(it, withCategory = true) {
     href: it.url || "#", target: "_blank", rel: "noreferrer",
   }, (it.title || "").length > 66
     ? `${it.title.slice(0, 66)}…` : it.title);
+  const catCell = el("td", {}, [
+    it.category || "—",
+    " ",
+    marketBadge(it.target || "id"),
+  ]);
   return el("tr", {}, [
     el("td", { class: "title-cell" }, [title]),
-    withCategory ? el("td", {}, it.category || "—") : el("td", {}, it.category || "—"),
+    catCell,
     el("td", { class: "right num" }, it.price || "—"),
     el("td", {}, it.size || "—"),
     el("td", {}, [listingBadge(status)]),
@@ -379,18 +513,22 @@ function jobLabel(kind) {
 function renderAccountsSelect() {
   const sel = $("#upload-account");
   const prev = sel.value;
+  const accounts = accountForTarget();
   sel.innerHTML = "";
-  if (!STATE.accounts.length) {
-    sel.append(el("option", { value: "" }, "Belum ada akun"));
+  if (!accounts.length) {
+    sel.append(el("option", { value: "" },
+      `Tidak ada akun ${STATE.marketLabels[STATE.target] || STATE.target} aktif`));
     return;
   }
   sel.append(el("option", { value: "__all__" },
-    `Semua akun (${STATE.accounts.length})`));
-  for (const a of STATE.accounts) {
+    `Semua akun ${STATE.marketLabels[STATE.target] || STATE.target} (${accounts.length})`));
+  for (const a of accounts) {
     sel.append(el("option", { value: a.id },
       `${a.label}${a.nickname ? ` — @${a.nickname}` : ""}`));
   }
-  if (prev) sel.value = prev;
+  if (prev && [...sel.options].some((o) => o.value === prev)) {
+    sel.value = prev;
+  }
   toggleUploadQuota();
 }
 
@@ -400,7 +538,8 @@ function uploadAllMode() {
 
 function renderUploadQuotas() {
   const box = $("#upload-quotas");
-  const sig = (STATE.accounts || []).map((a) => a.id).join(",");
+  const accounts = accountForTarget();
+  const sig = `${STATE.target}:${accounts.map((a) => a.id).join(",")}`;
   if (sig === STATE.uploadQuotaSig) return;
   const prev = {};
   $$("#upload-quotas input[data-account]").forEach((inp) => {
@@ -408,7 +547,12 @@ function renderUploadQuotas() {
   });
   STATE.uploadQuotaSig = sig;
   box.innerHTML = "";
-  for (const a of STATE.accounts || []) {
+  if (!accounts.length) {
+    box.append(el("p", { class: "empty-note" },
+      `Tidak ada akun ${STATE.marketLabels[STATE.target] || STATE.target} aktif.`));
+    return;
+  }
+  for (const a of accounts) {
     box.append(el("label", { class: "quota-item" }, [
       el("span", { class: "quota-name" },
         `${a.label}${a.nickname ? ` (@${a.nickname})` : ""}`),
@@ -604,6 +748,7 @@ function renderProxies() {
       ]),
       el("td", {}, [
         proxyBadge(p.status),
+        p.enabled ? null : el("span", { class: "micro" }, "nonaktif"),
         p.status === "fail" && p.last_error
           ? el("span", { class: "err-note" }, p.last_error)
           : null,
@@ -615,6 +760,10 @@ function renderProxies() {
       el("td", { class: "num" }, timeShort(p.checked_at)),
       el("td", {}, [
         el("div", { class: "row-actions" }, [
+          el("button", {
+            class: "btn btn-mini", type: "button",
+            onclick: () => toggleProxy(p),
+          }, p.enabled ? "Nonaktifkan" : "Aktifkan"),
           el("button", {
             class: "btn btn-mini", type: "button",
             onclick: () => checkProxy(p),
@@ -636,6 +785,16 @@ async function checkProxy(p) {
     toast(res.ok
       ? `${p.label}: hidup (${res.latency_ms} ms, IP ${res.exit_ip})`
       : `${p.label}: mati — ${res.error}`, res.ok ? "ok" : "err");
+    await refresh();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
+
+async function toggleProxy(p) {
+  try {
+    await api(`/api/proxies/${p.id}?enabled=${p.enabled ? "false" : "true"}`,
+      { method: "PATCH" });
     await refresh();
   } catch (err) {
     toast(err.message, "err");
@@ -796,12 +955,20 @@ function currentQuotaValues() {
   return out;
 }
 
+function currentScheduleMode() {
+  const sel = $("#sched-mode");
+  return (sel && sel.value) || STATE.mode;
+}
+
 function renderScheduleQuotas(quotas = []) {
   const box = $("#sched-quotas");
   box.innerHTML = "";
-  const accounts = STATE.accounts || [];
+  const target = modeTarget(currentScheduleMode());
+  const accounts = (STATE.accounts || []).filter(
+    (a) => a.enabled && (a.marketplace || "id") === target);
   if (!accounts.length) {
-    box.append(el("p", { class: "empty-note" }, "Belum ada akun."));
+    box.append(el("p", { class: "empty-note" },
+      `Belum ada akun ${STATE.marketLabels[target] || target} aktif.`));
     return;
   }
   const map = {};
@@ -855,7 +1022,8 @@ function renderSchedules() {
   const active = list.filter((s) => s.enabled).length;
   $("#sched-summary").textContent = `${active} aktif / ${list.length} jadwal`;
 
-  const sig = (STATE.accounts || []).map((a) => a.id).join(",");
+  const sig = `${currentScheduleMode()}:`
+    + (STATE.accounts || []).map((a) => a.id).join(",");
   if (sig !== STATE.schedQuotaSig) {
     STATE.schedQuotaSig = sig;
     renderScheduleQuotas(currentQuotaValues());
@@ -877,6 +1045,8 @@ function renderSchedules() {
             el("span", {}, s.category === "__account__"
               ? "ikut kategori akun"
               : (s.category || "semua kategori")),
+            el("span", {}, " "),
+            marketBadge(modeTarget(s.mode || "my_to_id")),
           ]),
         ]),
       ]),
@@ -924,11 +1094,13 @@ function resetScheduleForm() {
   $("#sched-id").value = "";
   $("#sched-name").value = "";
   $("#sched-times").value = "";
+  $("#sched-mode").value = STATE.mode;
   $("#sched-category").value = "";
   $("#sched-fast").checked = false;
   $("#sched-rotate").value = "account";
   $("#sched-proxy").value = "off";
   $$("#sched-days input").forEach((i) => { i.checked = false; });
+  STATE.schedQuotaSig = "";
   renderScheduleQuotas([]);
   $("#sched-form-title").textContent = "Jadwal baru";
   $("#sched-cancel").hidden = true;
@@ -940,6 +1112,7 @@ function editSchedule(s) {
   $("#sched-id").value = s.id;
   $("#sched-name").value = s.name;
   $("#sched-times").value = (s.times || []).join(", ");
+  $("#sched-mode").value = s.mode || "my_to_id";
   $("#sched-category").value = s.category || "";
   $("#sched-fast").checked = !!s.fast;
   $("#sched-rotate").value = s.rotate || "account";
@@ -989,6 +1162,11 @@ async function runScheduleNow(s) {
 
 $("#sched-cancel").addEventListener("click", resetScheduleForm);
 
+$("#sched-mode").addEventListener("change", () => {
+  STATE.schedQuotaSig = "";
+  renderScheduleQuotas([]);
+});
+
 $("#sched-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const note = $("#sched-msg");
@@ -1004,6 +1182,7 @@ $("#sched-form").addEventListener("submit", async (e) => {
     name: $("#sched-name").value.trim(),
     times,
     days,
+    mode: currentScheduleMode(),
     category: $("#sched-category").value,
     fast: $("#sched-fast").checked,
     rotate: $("#sched-rotate").value,
@@ -1056,9 +1235,24 @@ function fillSettings(data) {
   $("#set-price-min").value = up.price_min ?? 40000;
   $("#set-price-max").value = up.price_max ?? 60000;
   $("#set-price-step").value = up.price_step ?? 1000;
+  const currency = data.currency || "Rp";
+  $("#set-price-min").closest(".field").querySelector("label").textContent =
+    `Harga min (${currency})`;
+  $("#set-price-max").closest(".field").querySelector("label").textContent =
+    `Harga max (${currency})`;
   const cond = $("#set-condition");
-  cond.value = up.condition || "Digunakan dengan baik";
-  if (!cond.value) cond.value = "Digunakan dengan baik";
+  const conditions = data.target === "my"
+    ? ["Brand new", "Like new", "Lightly used", "Well used", "Heavily used"]
+    : ["Barang baru", "Seperti baru", "Tidak terlalu sering digunakan",
+       "Digunakan dengan baik", "Sering digunakan"];
+  cond.innerHTML = "";
+  for (const name of conditions) {
+    cond.append(el("option", { value: name }, name));
+  }
+  cond.value = conditions.includes(up.condition)
+    ? up.condition : conditions[3];
+  const settingsMode = $("#settings-mode-label");
+  if (settingsMode) settingsMode.textContent = data.mode_label || data.mode;
   const preview = data.preview || {};
   $("#preview-desc").textContent = preview.description || "";
   $("#preview-delivery").textContent = preview.delivery || "";
@@ -1066,7 +1260,7 @@ function fillSettings(data) {
 }
 
 async function loadSettings() {
-  fillSettings(await api("/api/settings"));
+  fillSettings(await api(`/api/settings?mode=${encodeURIComponent(STATE.mode)}`));
 }
 
 function settingsFormValues() {
@@ -1103,7 +1297,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
   const note = $("#settings-msg");
   msg(note, "Menyimpan…");
   try {
-    const data = await api("/api/settings/upload", {
+    const data = await api(
+      `/api/settings/upload?mode=${encodeURIComponent(STATE.mode)}`, {
       method: "PUT",
       body: JSON.stringify(settingsFormValues()),
     });
@@ -1121,7 +1316,7 @@ $("#set-default").addEventListener("click", () => {
   $("#set-desc").value = defaults.description || "";
   $("#set-delivery").value = defaults.delivery || "";
   schedulePreview();
-  toast("Default CLI dimuat — klik Simpan untuk menerapkan.", "ok");
+  toast("Default mode dimuat — klik Simpan untuk menerapkan.", "ok");
 });
 
 /* ---------- refresh ---------- */
@@ -1138,13 +1333,19 @@ async function refresh() {
   STATE.schedules = data.schedules || [];
   STATE.currentJob = data.current_job || "";
   STATE.browser = data.browser || {};
+  STATE.mode = data.mode || "my_to_id";
+  STATE.target = data.target || modeTarget(STATE.mode);
+  STATE.modeLabel = data.mode_label || STATE.mode;
+  STATE.modes = data.modes || {};
+  STATE.marketLabels = data.market_labels || STATE.marketLabels;
 
-  const list = await api("/api/listings?limit=200");
+  const list = await api(`/api/listings?limit=200&target=${STATE.target}`);
   STATE.listings = list.items || [];
 
   $("#browser-mode").textContent = STATE.browser.headless
     ? "chromium · headless" : "chromium · tampil";
 
+  renderMode();
   renderDashboard();
   renderAccounts();
   renderCategories();
@@ -1153,6 +1354,9 @@ async function refresh() {
   renderJobs();
   renderUserAgents();
   renderProxies();
+  if (!STATE.editingSchedule && !$("#sched-id").value) {
+    $("#sched-mode").value = STATE.mode;
+  }
   renderSchedules();
   renderListings();
 }
@@ -1170,6 +1374,7 @@ $("#cookie-modal").addEventListener("click", (e) => {
 
 function openImport() {
   $("#cookie-modal").hidden = false;
+  $("#acct-marketplace").value = STATE.target;
   $("#acct-label").focus();
 }
 function closeImport() {
@@ -1202,7 +1407,9 @@ $("#test-cookie").addEventListener("click", async () => {
   try {
     const res = await api("/api/accounts/test", {
       method: "POST",
-      body: JSON.stringify({ cookies_text: text }),
+      body: JSON.stringify({
+        cookies_text: text, marketplace: $("#acct-marketplace").value,
+      }),
     });
     const extra = `${res.cookie_count} cookie`
       + (res.has_session ? " · ada cookie sesi" : " · tidak ada cookie sesi");
@@ -1226,6 +1433,7 @@ $("#submit-account").addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({
         label, cookies_text: cookiesText, niche: $("#acct-niche").value,
+        marketplace: $("#acct-marketplace").value,
       }),
     });
     msg(note, res.message, res.login ? "ok" : "error");
@@ -1234,6 +1442,7 @@ $("#submit-account").addEventListener("click", async () => {
       $("#acct-cookies").value = "";
       $("#acct-label").value = "";
       $("#acct-niche").value = "";
+      $("#acct-marketplace").value = STATE.target;
       closeImport();
       await refresh();
     }
@@ -1255,6 +1464,18 @@ $("#account-filter").addEventListener("click", (e) => {
     "is-active", b === btn));
   renderAccounts();
 });
+
+async function toggleAccount(acc) {
+  try {
+    await api(`/api/accounts/${acc.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: !acc.enabled }),
+    });
+    await refresh();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+}
 
 async function checkAccount(id) {
   try {
@@ -1297,7 +1518,7 @@ $("#scrape-form").addEventListener("submit", async (e) => {
   try {
     const { id } = await api("/api/jobs/scrape", {
       method: "POST",
-      body: JSON.stringify({ categories: cats, limit }),
+      body: JSON.stringify({ categories: cats, limit, mode: STATE.mode }),
     });
     msg(note, `Job ${id} berjalan.`, "ok");
     openJob(id);
@@ -1341,7 +1562,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
       method: "POST",
       body: JSON.stringify({
         account_id, category, limit, fast, rotate, proxy,
-        quotas: all ? quotas : {},
+        quotas: all ? quotas : {}, mode: STATE.mode,
       }),
     });
     msg(note, `Job ${id} berjalan.`, "ok");

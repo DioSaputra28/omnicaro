@@ -14,7 +14,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import authcheck, cookies, db, jobs, proxy_check, queueing, scheduler
 from .. import uploader
 from ..settings import (CLI_DEFAULT_DELIVERY, CLI_DEFAULT_DESCRIPTION,
-                        load_config, save_config)
+                        MARKET_BASE, MARKET_LABEL, MODE_LABELS, MY_DEFAULT_DESCRIPTION,
+                        load_config, mode_target, save_config)
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -25,19 +26,26 @@ class AccountIn(BaseModel):
     label: str = ""
     cookies_text: str = ""
     niche: str = ""
+    marketplace: str = "id"
 
 
 class AccountPatch(BaseModel):
-    niche: str = ""
+    niche: str | None = None
+    proxy_id: str | None = None
+    user_agent_id: str | None = None
+    enabled: bool | None = None
+    marketplace: str | None = None
 
 
 class CookieTestIn(BaseModel):
     cookies_text: str = ""
+    marketplace: str = "id"
 
 
 class ScrapeIn(BaseModel):
     categories: list[str] = []
     limit: int = 20
+    mode: str | None = None
 
 
 class UploadIn(BaseModel):
@@ -48,6 +56,7 @@ class UploadIn(BaseModel):
     rotate: str = "account"   # off | account | listing
     proxy: str = "off"        # off | rotate
     quotas: dict[str, int] = {}
+    mode: str | None = None
 
 
 class UserAgentIn(BaseModel):
@@ -86,8 +95,13 @@ class ScheduleIn(BaseModel):
     fast: bool = False
     rotate: str = "account"
     proxy: str = "off"
+    mode: str = "my_to_id"
     enabled: bool | None = None
     quotas: list[QuotaIn] = []
+
+
+class ModeIn(BaseModel):
+    mode: str = "my_to_id"
 
 
 @app.on_event("startup")
@@ -104,13 +118,20 @@ def index():
 @app.get("/api/state")
 def state():
     cfg = load_config()
+    mode = cfg["mode"]
+    target = mode_target(mode)
     accounts = db.list_accounts()
     for a in accounts:
         a["stats"] = db.login_stats(a["id"])
     return {
         "accounts": accounts,
-        "counts": db.count_listings(),
+        "counts": db.count_listings(target),
         "categories": cfg.get("scrape", {}).get("categories", {}),
+        "mode": mode,
+        "target": target,
+        "modes": {key: {"label": label} for key, label in MODE_LABELS.items()},
+        "mode_label": MODE_LABELS.get(mode, mode),
+        "market_labels": MARKET_LABEL,
         "jobs": db.list_jobs(15),
         "current_job": jobs.manager.current(),
         "user_agents": db.list_user_agents(),
@@ -122,13 +143,24 @@ def state():
     }
 
 
+@app.put("/api/mode")
+def set_mode(payload: ModeIn):
+    if payload.mode not in MODE_LABELS:
+        raise HTTPException(status_code=400, detail="mode tidak dikenal")
+    cfg = load_config()
+    cfg["mode"] = payload.mode
+    save_config(cfg)
+    return {"ok": True, "mode": payload.mode}
+
+
 @app.post("/api/accounts/test")
 async def test_account_cookie(payload: CookieTestIn):
     try:
         state = cookies.parse_text(payload.cookies_text)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    ok, who = await run_in_threadpool(authcheck.check_state, state)
+    ok, who = await run_in_threadpool(
+        authcheck.check_state, state, None, payload.marketplace)
     blocked = (not ok and who == authcheck.CHALLENGE)
     if ok:
         message = f"Login OK: {who or 'akun'}"
@@ -155,9 +187,11 @@ async def add_account(payload: AccountIn):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     label = (payload.label or "").strip() or "akun"
+    market = payload.marketplace if payload.marketplace in MARKET_BASE else "id"
     categories = (load_config().get("scrape") or {}).get("categories") or {}
     niche = payload.niche if payload.niche in categories else ""
-    aid = db.add_account(label, state_cookies, status="unknown", niche=niche)
+    aid = db.add_account(label, state_cookies, status="unknown", niche=niche,
+                         marketplace=market)
 
     def _validate() -> tuple[bool, str]:
         acc = db.get_account(aid)
@@ -180,11 +214,36 @@ async def add_account(payload: AccountIn):
 
 @app.patch("/api/accounts/{account_id}")
 def patch_account(account_id: str, payload: AccountPatch):
-    if not db.get_account(account_id):
+    account = db.get_account(account_id)
+    if not account:
         raise HTTPException(status_code=404, detail="akun tidak ditemukan")
-    categories = (load_config().get("scrape") or {}).get("categories") or {}
-    niche = payload.niche if payload.niche in categories else ""
-    db.set_account_niche(account_id, niche)
+    if payload.enabled is not None:
+        db.set_account_enabled(account_id, bool(payload.enabled))
+    if payload.marketplace is not None:
+        if payload.marketplace not in MARKET_BASE:
+            raise HTTPException(status_code=400,
+                                detail="marketplace tidak dikenal")
+        if payload.marketplace != (account.get("marketplace") or "id"):
+            db.set_account_marketplace(account_id, payload.marketplace)
+            db.update_account_status(account_id, "unknown", "")
+    if payload.niche is not None:
+        categories = (load_config().get("scrape") or {}).get("categories") or {}
+        niche = payload.niche if payload.niche in categories else ""
+        db.set_account_niche(account_id, niche)
+    if payload.proxy_id is not None or payload.user_agent_id is not None:
+        proxy_ids = {p["id"] for p in db.list_proxies()}
+        ua_ids = {u["id"] for u in db.list_user_agents()}
+        proxy_id = (payload.proxy_id if payload.proxy_id is not None
+                    else account.get("proxy_id") or "")
+        ua_id = (payload.user_agent_id
+                 if payload.user_agent_id is not None
+                 else account.get("user_agent_id") or "")
+        if proxy_id and proxy_id not in proxy_ids:
+            raise HTTPException(status_code=400, detail="proxy tidak ditemukan")
+        if ua_id and ua_id not in ua_ids:
+            raise HTTPException(status_code=400,
+                                detail="user agent tidak ditemukan")
+        db.set_account_identity(account_id, proxy_id, ua_id)
     return {"ok": True}
 
 
@@ -195,8 +254,9 @@ def delete_account(account_id: str):
 
 
 @app.get("/api/listings")
-def listings(limit: int = 200, category: str = ""):
-    return {"items": db.list_listings(limit=limit, category=category)}
+def listings(limit: int = 200, category: str = "", target: str = ""):
+    return {"items": db.list_listings(limit=limit, category=category,
+                                      target=target)}
 
 
 @app.get("/api/jobs")
@@ -206,11 +266,19 @@ def list_jobs():
 
 @app.post("/api/jobs/scrape")
 def start_scrape(payload: ScrapeIn):
+    mode = payload.mode or load_config()["mode"]
+    if mode not in MODE_LABELS:
+        raise HTTPException(status_code=400, detail="mode tidak dikenal")
     if not payload.categories:
         raise HTTPException(status_code=400, detail="pilih minimal 1 kategori")
+    categories = (load_config(mode).get("scrape") or {}).get("categories") or {}
+    if any(cat not in categories for cat in payload.categories):
+        raise HTTPException(status_code=400,
+                            detail="kategori tidak ada di mode ini")
     job_id = jobs.manager.submit("scrape", {
         "categories": payload.categories,
         "limit": max(1, payload.limit),
+        "mode": mode,
     })
     return {"id": job_id}
 
@@ -220,7 +288,14 @@ def start_upload(payload: UploadIn):
     rotate = payload.rotate if payload.rotate in ("off", "account", "listing") \
         else "account"
     proxy = payload.proxy if payload.proxy in ("off", "rotate") else "off"
-    valid_accounts = {a["id"] for a in db.list_accounts()}
+    mode = payload.mode or load_config()["mode"]
+    if mode not in MODE_LABELS:
+        raise HTTPException(status_code=400, detail="mode tidak dikenal")
+    target = mode_target(mode)
+    valid_accounts = {
+        a["id"] for a in db.list_accounts()
+        if (a.get("marketplace") or "id") == target and a.get("enabled", 1)
+    }
     quotas = {key: max(0, min(500, int(value)))
               for key, value in (payload.quotas or {}).items()
               if key in valid_accounts}
@@ -231,16 +306,22 @@ def start_upload(payload: UploadIn):
         "rotate": rotate,
         "proxy": proxy,
         "quotas": quotas,
+        "mode": mode,
     }
     if payload.account_id == "__all__":
         if not valid_accounts:
-            raise HTTPException(status_code=400, detail="belum ada akun")
+            raise HTTPException(
+                status_code=400,
+                detail=f"belum ada akun aktif untuk {MARKET_LABEL[target]}")
         if quotas and not any(value > 0 for value in quotas.values()):
             raise HTTPException(status_code=400,
                                 detail="semua kuota akun bernilai 0")
         return {"id": jobs.manager.submit("upload_all", common)}
     if payload.account_id not in valid_accounts:
-        raise HTTPException(status_code=400, detail="akun tidak ditemukan")
+        raise HTTPException(
+            status_code=400,
+            detail=f"akun tidak aktif / bukan marketplace"
+                   f" {MARKET_LABEL[target]}")
     if payload.account_id in quotas:
         quota = quotas[payload.account_id]
         if quota <= 0:
@@ -280,8 +361,10 @@ def remove_user_agent(agent_id: str):
 
 # ---------- pengaturan template ----------
 
-def _settings_payload() -> dict:
-    cfg = load_config()
+def _settings_payload(mode: str | None = None) -> dict:
+    cfg = load_config(mode)
+    mode = cfg["mode"]
+    target = mode_target(mode)
     up = cfg.get("upload") or {}
     categories = (cfg.get("scrape") or {}).get("categories") or {}
     search = up.get("size_search") or {}
@@ -292,13 +375,19 @@ def _settings_payload() -> dict:
                 "leaf": leaf.get(key, "")}
                for key, info in categories.items()]
     return {
+        "mode": mode,
+        "mode_label": MODE_LABELS.get(mode, mode),
+        "target": target,
+        "market_label": MARKET_LABEL.get(target, target),
+        "currency": "RM" if target == "my" else "Rp",
         "upload": up,
         "preview": {
             "description": uploader.sanitize_text(up.get("description") or ""),
             "delivery": uploader.sanitize_delivery(up.get("delivery") or ""),
         },
         "defaults": {
-            "description": CLI_DEFAULT_DESCRIPTION,
+            "description": (MY_DEFAULT_DESCRIPTION if target == "my"
+                            else CLI_DEFAULT_DESCRIPTION),
             "delivery": CLI_DEFAULT_DELIVERY,
         },
         "mapping": mapping,
@@ -306,12 +395,14 @@ def _settings_payload() -> dict:
 
 
 @app.get("/api/settings")
-def get_settings():
-    return _settings_payload()
+def get_settings(mode: str | None = None):
+    if mode is not None and mode not in MODE_LABELS:
+        raise HTTPException(status_code=400, detail="mode tidak dikenal")
+    return _settings_payload(mode)
 
 
 @app.put("/api/settings/upload")
-def put_settings(payload: UploadSettingsIn):
+def put_settings(payload: UploadSettingsIn, mode: str | None = None):
     price_min = int(payload.price_min)
     price_max = int(payload.price_max)
     price_step = max(1, int(payload.price_step))
@@ -319,15 +410,20 @@ def put_settings(payload: UploadSettingsIn):
         raise HTTPException(status_code=400,
                             detail="rentang harga tidak valid")
     cfg = load_config()
-    up = cfg.setdefault("upload", {})
+    mode = mode or cfg["mode"]
+    if mode not in MODE_LABELS:
+        raise HTTPException(status_code=400, detail="mode tidak dikenal")
+    up = cfg["modes"][mode].setdefault("upload", {})
     up["description"] = payload.description or ""
     up["delivery"] = payload.delivery or ""
     up["price_min"] = price_min
     up["price_max"] = price_max
     up["price_step"] = price_step
-    up["condition"] = (payload.condition or "Digunakan dengan baik").strip()
+    default_condition = ("Well used" if mode_target(mode) == "my"
+                         else "Digunakan dengan baik")
+    up["condition"] = (payload.condition or default_condition).strip()
     save_config(cfg)
-    return _settings_payload()
+    return _settings_payload(mode)
 
 
 @app.post("/api/settings/preview")
@@ -362,7 +458,12 @@ def _clean_schedule(payload: ScheduleIn, existing: dict | None = None) -> dict:
 
     days = sorted({int(d) for d in payload.days if 0 <= int(d) <= 6})
 
-    valid_accounts = {a["id"] for a in db.list_accounts()}
+    mode = payload.mode if payload.mode in MODE_LABELS else "my_to_id"
+    target = mode_target(mode)
+    valid_accounts = {
+        a["id"] for a in db.list_accounts()
+        if (a.get("marketplace") or "id") == target
+    }
     quotas: list[dict] = []
     seen: set[str] = set()
     for q in payload.quotas:
@@ -392,6 +493,7 @@ def _clean_schedule(payload: ScheduleIn, existing: dict | None = None) -> dict:
         "fast": bool(payload.fast),
         "rotate": rotate,
         "proxy": proxy,
+        "mode": mode,
         "enabled": enabled,
         "quotas": quotas,
     }
@@ -449,6 +551,7 @@ def run_schedule_now(schedule_id: str):
         "fast": sched["fast"],
         "rotate": sched["rotate"],
         "proxy": sched["proxy"],
+        "mode": sched.get("mode") or "my_to_id",
     })
     db.touch_schedule(schedule_id, db.now())
     return {"id": job_id}

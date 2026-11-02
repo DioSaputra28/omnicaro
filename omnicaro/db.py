@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     label       TEXT NOT NULL,
     nickname    TEXT DEFAULT '',
     niche       TEXT DEFAULT '',
+    proxy_id    TEXT DEFAULT '',
+    user_agent_id TEXT DEFAULT '',
+    marketplace TEXT DEFAULT 'id',
+    enabled     INTEGER DEFAULT 1,
     status      TEXT DEFAULT 'unknown',
     cookies     TEXT NOT NULL,
     note        TEXT DEFAULT '',
@@ -35,6 +39,7 @@ CREATE TABLE IF NOT EXISTS listings (
     url         TEXT DEFAULT '',
     image_files TEXT DEFAULT '',
     size        TEXT DEFAULT 'M',
+    target      TEXT DEFAULT 'id',
     scraped_at  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS uploads (
@@ -104,6 +109,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     fast        INTEGER DEFAULT 0,
     rotate      TEXT DEFAULT 'account',
     proxy       TEXT DEFAULT 'off',
+    mode        TEXT DEFAULT 'my_to_id',
     enabled     INTEGER DEFAULT 1,
     last_run_at TEXT DEFAULT '',
     created_at  TEXT NOT NULL
@@ -159,6 +165,26 @@ def init_db() -> None:
         if "niche" not in acols:
             conn.execute("ALTER TABLE accounts ADD COLUMN niche"
                          " TEXT DEFAULT ''")
+        if "proxy_id" not in acols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN proxy_id"
+                         " TEXT DEFAULT ''")
+        if "user_agent_id" not in acols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN user_agent_id"
+                         " TEXT DEFAULT ''")
+        if "enabled" not in acols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN enabled"
+                         " INTEGER DEFAULT 1")
+        if "marketplace" not in acols:
+            conn.execute("ALTER TABLE accounts ADD COLUMN marketplace"
+                         " TEXT DEFAULT 'id'")
+        lcols = {r["name"] for r in conn.execute("PRAGMA table_info(listings)")}
+        if "target" not in lcols:
+            conn.execute("ALTER TABLE listings ADD COLUMN target"
+                         " TEXT DEFAULT 'id'")
+        scols = {r["name"] for r in conn.execute("PRAGMA table_info(schedules)")}
+        if "mode" not in scols:
+            conn.execute("ALTER TABLE schedules ADD COLUMN mode"
+                         " TEXT DEFAULT 'my_to_id'")
         count = conn.execute("SELECT COUNT(*) c FROM user_agents").fetchone()["c"]
         if count == 0:
             for label, ua in SEED_UAS:
@@ -171,13 +197,15 @@ def init_db() -> None:
 # ---------- akun ----------
 
 def add_account(label: str, cookies: dict, nickname: str = "",
-                status: str = "unknown", niche: str = "") -> str:
+                status: str = "unknown", niche: str = "",
+                marketplace: str = "id") -> str:
     aid = uuid.uuid4().hex[:12]
     with _LOCK, connect() as conn:
         conn.execute(
-            "INSERT INTO accounts(id,label,nickname,niche,status,cookies,"
-            " created_at) VALUES(?,?,?,?,?,?,?)",
-            (aid, label.strip() or "akun", nickname, niche or "", status,
+            "INSERT INTO accounts(id,label,nickname,niche,marketplace,status,"
+            " cookies,created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (aid, label.strip() or "akun", nickname, niche or "",
+             marketplace if marketplace in ("id", "my") else "id", status,
              json.dumps(cookies), now()))
     return aid
 
@@ -185,15 +213,44 @@ def add_account(label: str, cookies: dict, nickname: str = "",
 def list_accounts() -> list[dict]:
     with _LOCK, connect() as conn:
         rows = conn.execute(
-            "SELECT id,label,nickname,niche,status,note,last_check,created_at"
+            "SELECT id,label,nickname,niche,proxy_id,user_agent_id,marketplace,"
+            "enabled,status,note,last_check,created_at"
             " FROM accounts ORDER BY created_at").fetchall()
     return [dict(r) for r in rows]
+
+
+def set_account_marketplace(account_id: str, marketplace: str) -> None:
+    with _LOCK, connect() as conn:
+        conn.execute("UPDATE accounts SET marketplace=? WHERE id=?",
+                     (marketplace if marketplace in ("id", "my") else "id",
+                      account_id))
 
 
 def set_account_niche(account_id: str, niche: str) -> None:
     with _LOCK, connect() as conn:
         conn.execute("UPDATE accounts SET niche=? WHERE id=?",
                      (niche or "", account_id))
+
+
+def set_account_enabled(account_id: str, enabled: bool) -> None:
+    with _LOCK, connect() as conn:
+        conn.execute("UPDATE accounts SET enabled=? WHERE id=?",
+                     (1 if enabled else 0, account_id))
+
+
+def set_account_identity(account_id: str, proxy_id: str,
+                         user_agent_id: str) -> None:
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "UPDATE accounts SET proxy_id=?, user_agent_id=? WHERE id=?",
+            (proxy_id or "", user_agent_id or "", account_id))
+
+
+def update_account_cookies(account_id: str, state: dict) -> None:
+    """Simpan storage_state terbaru (cookie sesi bisa dirotasi Carousell)."""
+    with _LOCK, connect() as conn:
+        conn.execute("UPDATE accounts SET cookies=? WHERE id=?",
+                     (json.dumps(state), account_id))
 
 
 def get_account(account_id: str) -> dict | None:
@@ -286,10 +343,12 @@ def save_listing(item: dict, digests: dict[str, str]) -> bool:
     with _LOCK, connect() as conn:
         cur = conn.execute(
             "INSERT OR IGNORE INTO listings(id,category,title,price,condition,"
-            "url,image_files,size,scraped_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "url,image_files,size,target,scraped_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?)",
             (item["id"], item["category"], item["title"], item.get("price", ""),
              item.get("condition", ""), item.get("url", ""),
-             item.get("image_files", ""), item.get("size", "M"), now()))
+             item.get("image_files", ""), item.get("size", "M"),
+             item.get("target", "id"), now()))
         if cur.rowcount == 0:
             return False
         conn.execute("INSERT OR IGNORE INTO seen(listing_id) VALUES(?)",
@@ -309,26 +368,40 @@ def mark_image_digest(digest: str, listing_id: str) -> None:
             (digest, listing_id))
 
 
-def list_listings(limit: int = 300, category: str = "") -> list[dict]:
+def list_listings(limit: int = 300, category: str = "",
+                  target: str = "") -> list[dict]:
     q = ("SELECT l.*, u.status AS upload_status, u.account_id AS upload_account"
          " FROM listings l LEFT JOIN uploads u ON u.listing_id=l.id")
+    where: list[str] = []
     args: list = []
     if category:
-        q += " WHERE l.category=?"
+        where.append("l.category=?")
         args.append(category)
+    if target:
+        where.append("l.target=?")
+        args.append(target)
+    if where:
+        q += " WHERE " + " AND ".join(where)
     q += " ORDER BY l.scraped_at DESC LIMIT ?"
     args.append(limit)
     with _LOCK, connect() as conn:
         return [dict(r) for r in conn.execute(q, args).fetchall()]
 
 
-def count_listings() -> dict:
+def count_listings(target: str = "") -> dict:
+    where = " WHERE target=?" if target else ""
+    args = (target,) if target else ()
     with _LOCK, connect() as conn:
-        total = conn.execute("SELECT COUNT(*) c FROM listings").fetchone()["c"]
+        total = conn.execute("SELECT COUNT(*) c FROM listings" + where,
+                             args).fetchone()["c"]
         posted = conn.execute(
-            "SELECT COUNT(*) c FROM uploads WHERE status='posted'").fetchone()["c"]
+            "SELECT COUNT(*) c FROM uploads u JOIN listings l"
+            " ON l.id=u.listing_id WHERE u.status='posted'"
+            + (" AND l.target=?" if target else ""), args).fetchone()["c"]
         failed = conn.execute(
-            "SELECT COUNT(*) c FROM uploads WHERE status='error'").fetchone()["c"]
+            "SELECT COUNT(*) c FROM uploads u JOIN listings l"
+            " ON l.id=u.listing_id WHERE u.status='error'"
+            + (" AND l.target=?" if target else ""), args).fetchone()["c"]
         seen = conn.execute("SELECT COUNT(*) c FROM seen").fetchone()["c"]
     return {"listings": total, "posted": posted, "failed": failed,
             "seen": seen, "pending": max(0, total - posted)}
@@ -337,14 +410,19 @@ def count_listings() -> dict:
 # ---------- antrean upload ----------
 
 def uploadable(category: str, limit: int,
-               exclude_accounts: set[str] | None = None) -> list[dict]:
+               exclude_accounts: set[str] | None = None,
+               target: str = "") -> list[dict]:
     """Listing kategori ini yang belum pernah diposting (posted)."""
     excl = exclude_accounts or set()
+    q = ("SELECT l.* FROM listings l LEFT JOIN uploads u ON u.listing_id=l.id"
+         " WHERE l.category=? AND (u.status IS NULL OR u.status!='posted')")
+    args: list = [category]
+    if target:
+        q += " AND l.target=?"
+        args.append(target)
+    q += " ORDER BY l.scraped_at"
     with _LOCK, connect() as conn:
-        rows = conn.execute(
-            "SELECT l.* FROM listings l LEFT JOIN uploads u ON u.listing_id=l.id"
-            " WHERE l.category=? AND (u.status IS NULL OR u.status!='posted')"
-            " ORDER BY l.scraped_at", (category,)).fetchall()
+        rows = conn.execute(q, args).fetchall()
     out = [dict(r) for r in rows
            if r["id"] not in excl]
     return out[:limit]
@@ -393,6 +471,25 @@ def set_user_agent_enabled(agent_id: str, enabled: bool) -> None:
     with _LOCK, connect() as conn:
         conn.execute("UPDATE user_agents SET enabled=? WHERE id=?",
                      (1 if enabled else 0, agent_id))
+
+
+def get_user_agent(agent_id: str) -> dict | None:
+    with _LOCK, connect() as conn:
+        row = conn.execute(
+            "SELECT id,label,ua,enabled,use_count FROM user_agents"
+            " WHERE id=?", (agent_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def use_user_agent(agent_id: str) -> dict | None:
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "UPDATE user_agents SET last_used_at=?, use_count=use_count+1"
+            " WHERE id=?", (now(), agent_id))
+        row = conn.execute(
+            "SELECT id,label,ua,enabled,use_count FROM user_agents"
+            " WHERE id=?", (agent_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def delete_user_agent(agent_id: str) -> None:
@@ -485,6 +582,16 @@ def get_proxy(pid: str) -> dict | None:
     return dict(row) if row else None
 
 
+def use_proxy(pid: str) -> dict | None:
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "UPDATE proxies SET last_used_at=?, use_count=use_count+1"
+            " WHERE id=?", (now(), pid))
+        row = conn.execute("SELECT * FROM proxies WHERE id=?",
+                           (pid,)).fetchone()
+    return dict(row) if row else None
+
+
 def next_proxy() -> dict | None:
     """Rotasi proxy: prioritaskan yang sehat, lalu paling lama tidak dipakai."""
     with _LOCK, connect() as conn:
@@ -542,20 +649,21 @@ def save_schedule(data: dict, schedule_id: str | None = None) -> str:
         1 if data.get("fast") else 0,
         data.get("rotate") or "account",
         data.get("proxy") or "off",
+        data.get("mode") or "my_to_id",
         1 if data.get("enabled", True) else 0,
     )
     with _LOCK, connect() as conn:
         if schedule_id:
             conn.execute(
                 "UPDATE schedules SET name=?, times=?, days=?, category=?,"
-                " fast=?, rotate=?, proxy=?, enabled=? WHERE id=?",
+                " fast=?, rotate=?, proxy=?, mode=?, enabled=? WHERE id=?",
                 values + (schedule_id,))
         else:
             schedule_id = uuid.uuid4().hex[:10]
             conn.execute(
                 "INSERT INTO schedules(id,name,times,days,category,fast,"
-                " rotate,proxy,enabled,created_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                " rotate,proxy,mode,enabled,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (schedule_id,) + values + (now(),))
         conn.execute("DELETE FROM schedule_quotas WHERE schedule_id=?",
                      (schedule_id,))

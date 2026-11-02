@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>omnicaro — operations console</title>
+<link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,6 +32,12 @@
       <span>System live</span>
       <span class="ver">v0.1</span>
     </div>
+
+    <div class="mode-switch" role="group" aria-label="Mode arah marketplace">
+      <button type="button" class="mode-btn" data-mode="my_to_id">MY → ID</button>
+      <button type="button" class="mode-btn" data-mode="id_to_my">ID → MY</button>
+    </div>
+    <div class="mode-note" id="mode-note">Malaysia → Indonesia</div>
 
     <div class="nav-label">Workspace</div>
     <nav class="nav" aria-label="Navigasi utama">
@@ -275,7 +282,7 @@
           <div>
             <div class="eyebrow">Sumber data</div>
             <h1>Katalog</h1>
-            <p class="lede">Scrape listing baru dari Carousell Malaysia. Item yang sudah ada dilewati otomatis.</p>
+            <p class="lede" id="scrape-lede">Scrape listing baru dari Carousell Malaysia. Item yang sudah ada dilewati otomatis.</p>
           </div>
         </div>
 
@@ -501,6 +508,13 @@
                 <input id="sched-times" type="text" placeholder="07:00, 12:00, 16:00" autocomplete="off">
               </div>
               <div class="field">
+                <label for="sched-mode">Arah</label>
+                <select id="sched-mode">
+                  <option value="my_to_id">MY → ID</option>
+                  <option value="id_to_my">ID → MY</option>
+                </select>
+              </div>
+              <div class="field">
                 <label for="sched-category">Kategori</label>
                 <select id="sched-category"><option value="">Semua kategori</option></select>
               </div>
@@ -575,6 +589,7 @@
             <p class="lede">Atur isi listing yang dipakai saat posting: deskripsi, link Shopee di opsi pengiriman, harga, dan kondisi.</p>
           </div>
           <div class="head-actions">
+            <span class="badge badge-neutral" id="settings-mode-label">MY → ID</span>
             <span class="badge badge-neutral">berlaku untuk semua akun</span>
           </div>
         </div>
@@ -589,7 +604,7 @@
               <div class="field field-grow">
                 <label for="set-desc">Deskripsi</label>
                 <textarea id="set-desc" rows="10" spellcheck="false"></textarea>
-                <span class="micro">Baris berisi link atau kata "shopee" polos otomatis dibuang saat posting.</span>
+                <span class="micro">Baris berisi link atau kata "shopee" polos otomatis dibuang saat posting. Urutan baris diacak per akun/listing (tanpa menambah emoji).</span>
               </div>
               <div class="field field-grow">
                 <label for="set-delivery">Opsi pengiriman / link Shopee</label>
@@ -675,6 +690,7 @@
         <section class="panel">
           <header class="panel-head">
             <h2>Jalankan posting</h2>
+            <span class="micro" id="upload-target-note">target: Indonesia</span>
             <span class="micro" id="worker-chip">worker idle</span>
           </header>
           <form id="upload-form" class="form-row">
@@ -753,6 +769,51 @@
   </div>
 </div>
 
+<!-- MODAL IDENTITAS AKUN -->
+<div class="modal-backdrop" id="identity-modal" hidden>
+  <div class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="identity-title">
+    <header class="modal-head">
+      <div>
+        <h2 id="identity-title">Identitas akun</h2>
+        <p class="micro" id="identity-account">—</p>
+      </div>
+      <button class="icon-btn" id="close-identity" aria-label="Tutup">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <div class="modal-body">
+      <div class="field">
+        <label for="identity-marketplace">Marketplace</label>
+        <select id="identity-marketplace">
+          <option value="id">Indonesia (id.carousell.com)</option>
+          <option value="my">Malaysia (carousell.com.my)</option>
+        </select>
+        <span class="micro">Menentukan target posting & halaman cek login akun ini.</span>
+      </div>
+      <div class="field">
+        <label for="identity-proxy">Proxy tetap</label>
+        <select id="identity-proxy">
+          <option value="">— ikut rotasi / mati —</option>
+        </select>
+        <span class="micro">Kalau dipilih, akun ini selalu memakai proxy tersebut.</span>
+      </div>
+      <div class="field">
+        <label for="identity-ua">User agent tetap</label>
+        <select id="identity-ua">
+          <option value="">— ikut rotasi / default —</option>
+        </select>
+        <span class="micro">Kalau dipilih, UA akun ini tidak berubah saat posting.</span>
+      </div>
+      <p class="form-msg" id="identity-msg" role="status"></p>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn" id="cancel-identity" type="button">Batal</button>
+      <button class="btn btn-primary" id="save-identity" type="button">Simpan</button>
+    </footer>
+  </div>
+</div>
+
 <!-- LOG DOCK -->
 <section class="log-dock is-closed" id="log-dock" aria-label="Log job">
   <div class="dock-resizer" id="dock-resizer" title="Tarik untuk atur tinggi"></div>
@@ -789,6 +850,14 @@
       <div class="field">
         <label for="acct-label">Nama akun</label>
         <input id="acct-label" type="text" placeholder="mis. Toko Utama" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="acct-marketplace">Marketplace akun</label>
+        <select id="acct-marketplace">
+          <option value="id">Indonesia (id.carousell.com)</option>
+          <option value="my">Malaysia (carousell.com.my)</option>
+        </select>
+        <span class="micro">Cookie ID hanya bisa posting ke ID, cookie MY ke MY.</span>
       </div>
       <div class="field">
         <label for="acct-niche">Kategori / niche</label>

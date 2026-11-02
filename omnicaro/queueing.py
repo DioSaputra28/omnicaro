@@ -4,14 +4,16 @@ from __future__ import annotations
 from . import db
 
 
-def build(account_id: str, limit: int, category: str = "") -> list[dict]:
-    """Ambil listing yang belum pernah posted, urut kronologis."""
-    rows = db.uploadable(category, limit) if category else _all_uploadable(limit)
+def build(account_id: str, limit: int, category: str = "",
+          target: str = "") -> list[dict]:
+    """Ambil listing target marketplace yang belum pernah posted, urut kronologis."""
+    rows = (db.uploadable(category, limit, target=target) if category
+            else _all_uploadable(limit, target))
     return rows[:max(0, limit)]
 
 
-def _all_uploadable(limit: int) -> list[dict]:
-    rows = db.list_listings(limit=5000)
+def _all_uploadable(limit: int, target: str = "") -> list[dict]:
+    rows = db.list_listings(limit=5000, target=target)
     out = [r for r in rows if r.get("upload_status") != "posted"]
     out.sort(key=lambda r: r.get("scraped_at", ""))
     return out[:max(0, limit)]

@@ -64,6 +64,7 @@ class Scheduler:
                     "fast": sched["fast"],
                     "rotate": sched["rotate"],
                     "proxy": sched["proxy"],
+                    "mode": sched.get("mode") or "my_to_id",
                 })
                 db.set_schedule_run_job(sched["id"], day, slot, job_id)
                 db.touch_schedule(sched["id"],

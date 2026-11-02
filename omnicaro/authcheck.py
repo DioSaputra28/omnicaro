@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 from . import browser as bmod
-from .settings import load_config
+from .settings import MARKET_BASE, load_config
 
 
 CHALLENGE = "challenge"
@@ -102,7 +102,9 @@ def _detect(page) -> tuple[bool, str]:
         inbox = likes = False
 
     # Header akun login: ikon Inbox/Likes ada, tombol Masuk/Daftar tidak ada.
-    if (inbox or likes) and "Masuk" not in body and "Daftar" not in body:
+    signed_out = any(mark in body for mark in
+                     ("Masuk", "Daftar", "Log in", "Sign up", "Log In"))
+    if (inbox or likes) and not signed_out:
         return True, ""
 
     acct = _account_from_html(page.content()) or _name_from_header(page)
@@ -141,14 +143,16 @@ def _check_loaded(page, target: str) -> tuple[bool, str]:
         return False, f"cek gagal: {type(e).__name__}"
 
 
-def check_page(page, cfg: dict | None = None) -> tuple[bool, str]:
+def check_page(page, cfg: dict | None = None,
+               marketplace: str = "id") -> tuple[bool, str]:
     """Cek login memakai page yang SUDAH terbuka (tanpa browser baru)."""
     cfg = cfg or load_config()
-    target = (cfg.get("upload") or {}).get("target", "https://id.carousell.com")
+    target = MARKET_BASE.get(marketplace, MARKET_BASE["id"])
     return _check_loaded(page, target)
 
 
-def check_state(state: dict | None, cfg: dict | None = None) -> tuple[bool, str]:
+def check_state(state: dict | None, cfg: dict | None = None,
+                marketplace: str = "id") -> tuple[bool, str]:
     """Buka Carousell dengan cookie apa pun (storage_state).
 
     Tidak pernah raise; error jaringan dianggap belum login.
@@ -156,7 +160,7 @@ def check_state(state: dict | None, cfg: dict | None = None) -> tuple[bool, str]
     from playwright.sync_api import sync_playwright
 
     cfg = cfg or load_config()
-    target = (cfg.get("upload") or {}).get("target", "https://id.carousell.com")
+    target = MARKET_BASE.get(marketplace, MARKET_BASE["id"])
     try:
         with sync_playwright() as p:
             br = bmod.launch(p, cfg)
@@ -174,4 +178,5 @@ def check_state(state: dict | None, cfg: dict | None = None) -> tuple[bool, str]
 
 def check(account: dict, cfg: dict | None = None) -> tuple[bool, str]:
     """Cek login dari dict akun (key 'cookies' = storage_state)."""
-    return check_state(account.get("cookies"), cfg)
+    market = account.get("marketplace") or "id"
+    return check_state(account.get("cookies"), cfg, marketplace=market)

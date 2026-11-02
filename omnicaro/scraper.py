@@ -11,7 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from . import db
-from .settings import IMAGES_DIR, load_config
+from .settings import IMAGES_DIR, load_config, mode_target
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -66,10 +66,20 @@ def parse_cards(html: str, base_url: str) -> list[dict]:
 
 
 def extract_photos(html: str, max_photos: int) -> list[str]:
+    """Ambil foto produk; dukung URL MY (.jpg) dan ID (_progressive)."""
     found = re.findall(
-        r"https://media\.karousell\.com/media/photos/products/[^\"'\s<>]+?\.jpg",
+        r"https://media\.karousell\.com/media/photos/products/[^\"'\s<>]+",
         html)
-    full = [u.split("?")[0] for u in found if "_thumbnail" not in u]
+    full: list[str] = []
+    for raw in found:
+        url = raw.split("?")[0]
+        if "_thumbnail" in url:
+            continue
+        if url.endswith("_progressive"):
+            url = url[:-len("_progressive")]
+        elif not re.search(r"\.(?:jpg|jpeg|png|webp)$", url, re.I):
+            continue
+        full.append(url)
     return list(dict.fromkeys(full))[:max(1, max_photos)]
 
 
@@ -121,10 +131,12 @@ def _log(log, msg: str) -> None:
         log(msg)
 
 
-def scrape_category(category: str, limit: int, log=None) -> int:
+def scrape_category(category: str, limit: int, log=None,
+                    mode: str | None = None) -> int:
     """Scrape 1 kategori sampai `limit` item BARU. Kembalikan jumlah tersimpan."""
-    cfg = load_config()
+    cfg = load_config(mode)
     sc = cfg.get("scrape") or {}
+    target = mode_target(cfg.get("mode", "my_to_id"))
     cat = (sc.get("categories") or {}).get(category)
     if not cat:
         _log(log, f"kategori '{category}' tidak ada di config")
@@ -185,7 +197,7 @@ def scrape_category(category: str, limit: int, log=None) -> int:
         ok = db.save_listing({
             "id": it["id"], "category": category, "title": it["title"],
             "price": it["price"], "condition": it["condition"], "url": it["url"],
-            "image_files": ";".join(files), "size": size,
+            "image_files": ";".join(files), "size": size, "target": target,
         }, digests)
         if ok:
             saved += 1

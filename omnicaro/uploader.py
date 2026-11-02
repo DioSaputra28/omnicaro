@@ -98,10 +98,23 @@ def is_logged_out(page) -> bool:
         if page.query_selector('a[href*="login"], a[href*="signup"]'):
             return True
         body = (page.inner_text("body") or "").lower()[:1200]
-        return ("masuk" in body and "daftar" in body
+        signed_out = (("masuk" in body and "daftar" in body)
+                      or ("log in" in body and "sign up" in body))
+        return (signed_out
                 and "keluar" not in body and "logout" not in body)
     except Exception:
         return False
+
+
+def vary_description(text: str, account_id: str = "",
+                     listing_id: str = "") -> str:
+    """Acak urutan baris deskripsi agar antar akun/listing tidak identik."""
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return text
+    rng = random.Random(f"{account_id}:{listing_id}")
+    rng.shuffle(lines)
+    return "\n".join(lines)
 
 
 def select_category(page, search: str, leaf: str, fast: bool = False) -> bool:
@@ -379,12 +392,15 @@ def fill_size(page, size: str, fast: bool = False) -> bool:
 # ---------- posting ----------
 
 def post_one(page, listing: dict, cfg: dict, rng: random.Random,
-             fast: bool = False, log=None) -> tuple[str, dict]:
+             fast: bool = False, log=None, account_id: str = "") -> tuple[str, dict]:
     up = cfg.get("upload") or {}
     target = (up.get("target") or "https://id.carousell.com").rstrip("/")
+    is_id = "id.carousell.com" in target
     kategori = listing.get("category", "")
-    search = (up.get("size_search") or {}).get(kategori) or "Fesyen Pria"
-    leaf = (up.get("size_leaf") or {}).get(kategori) or "Atasan"
+    search = ((up.get("size_search") or {}).get(kategori)
+              or ("Fesyen Pria" if is_id else "Men's Clothes"))
+    leaf = ((up.get("size_leaf") or {}).get(kategori)
+            or ("Atasan" if is_id else "Tops"))
     price = rng.randrange(int(up.get("price_min", 40000)),
                           int(up.get("price_max", 60000)) + 1,
                           int(up.get("price_step", 1000)))
@@ -398,6 +414,8 @@ def post_one(page, listing: dict, cfg: dict, rng: random.Random,
         if log:
             log("  teks dibersihkan: tautan/sebutan e-commerce tidak diizinkan")
     description, delivery = safe_description, safe_delivery
+    description = vary_description(description, account_id,
+                                   str(listing.get("id", "")))
     photos = [str(DATA_DIR / p) for p in
               (listing.get("image_files") or "").split(";") if p]
 

@@ -1,6 +1,6 @@
 # omnicaro
 
-Otomasi jual-beli barang second di Carousell: scrape katalog (MY) → posting ke akun (ID), lewat **web dashboard**.
+Otomasi jual-beli barang second di Carousell dengan **dua arah**: scrape katalog Malaysia → posting Indonesia, atau sebaliknya **scrape Indonesia → posting Malaysia**, lewat **web dashboard**.
 
 Cross-platform (Windows/Linux/macOS), tanpa ketergantungan API Windows. Akun ditambahkan dengan **menempel cookie Carousell** hasil ekstrak dari browser, lalu divalidasi otomatis.
 
@@ -19,15 +19,23 @@ Panduan lengkap deploy ke VPS (systemd, Nginx, HTTPS, backup, troubleshooting):
 ## Menambah akun (cookie)
 
 1. Login Carousell di browser (mis. Brave/Chrome).
-2. Ekstrak cookie domain `carousell.com` (mis. extension "Cookie-Editor" → Export JSON, atau DevTools → Application → Cookies).
-3. Dashboard → tab **Akun** → tempel JSON → **Tambah akun**.
-4. omnicaro memvalidasi login dengan membuka `id.carousell.com` memakai cookie tersebut.
+2. Ekstrak cookie domain `carousell.com` / `carousell.com.my` (mis. extension "Cookie-Editor" → Export JSON, atau DevTools → Application → Cookies).
+3. Dashboard → tab **Akun** → pilih **Marketplace akun** (Indonesia/Malaysia) → tempel JSON → **Tambah akun**.
+4. omnicaro memvalidasi login dengan membuka domain sesuai marketplace akun tersebut.
 
 Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB ini.
 
 ## Fitur
 
-- Scrape kategori MY (HTTP + foto penuh, dedup URL & SHA-256).
+- **Dua arah marketplace** (toggle di sidebar):
+  - **MY → ID**: sumber Malaysia, target Indonesia (harga Rp, kondisi ID).
+  - **ID → MY**: sumber Indonesia, target Malaysia (harga RM 10–30 default,
+    kondisi `Well used`, kategori English, deskripsi versi Melayu).
+  - Tiap mode punya config sendiri (`config.json` → `modes`), listing diberi
+    tag target, akun punya marketplace, dan antrean/kuota/jadwal otomatis
+    difilter sesuai mode.
+- Scrape kategori MY/ID (HTTP + foto penuh, dedup URL & SHA-256). Foto ID
+  format `_progressive` otomatis diambil versi full.
 - Upload per akun memakai `storage_state` (cookie), tanpa profil browser.
 - **Rotasi User Agent**: 200 UA master (Chrome/Edge/Firefox/Safari/Opera/Vivaldi
   desktop, versi stabil per Okt 2026) bisa dicari, ditambah, dinonaktifkan, atau
@@ -36,7 +44,7 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
 - **Proxy**: kelola daftar proxy (bulk `host:port` / `user:pass@host:port`),
   tombol **Tes dulu** (cek koneksi sebelum disimpan — yang mati otomatis tidak
   ditambahkan), cek hidup-mati lewat request nyata (latency + IP keluar), hapus,
-  serta **hitungan pemakaian** per proxy.
+  aktif/nonaktifkan, serta **hitungan pemakaian** per proxy.
   Posting bisa memakai rotasi proxy.
 - Job runner background + log live (SSE).
 - Posting bisa per akun atau **semua akun berurutan** (akun logout/error
@@ -89,6 +97,18 @@ Cookie disimpan di `omnicaro/data/omnicaro.db` (SQLite). Jangan bagikan file DB 
 - **Batal job**: tombol "Batal" di log dock (atau riwayat job) menghentikan
   posting/scrape yang sedang jalan. Item yang sedang diproses diselesaikan
   dulu, sisa listing tidak diubah, status job jadi `cancelled`.
+- **Cookie sesi disimpan balik** setelah setiap akun selesai (termasuk saat
+  logout/cancel) supaya token yang dirotasi Carousell tidak hilang dan akun
+  tidak “logout sendiri” di run berikutnya.
+- **Identitas tetap per akun**: tombol "Identitas" di Manajemen Akun untuk
+  mem-pin satu proxy dan satu UA. Selama dipin, akun selalu memakai identitas
+  itu (tidak ikut rotasi) — cocok untuk 1 akun = 1 IP sticky.
+- **Variasi deskripsi**: urutan baris deskripsi diacak per akun/listing saat
+  posting (tanpa menambah emoji), jadi antar akun tidak identik.
+- **Akun bisa dinonaktifkan**: tombol Aktifkan/Nonaktifkan di Manajemen Akun;
+  akun nonaktif tidak muncul di pilihan upload/kuota halaman Progres, tidak
+  dipakai saat posting (single maupun semua akun), dan dilewati saat cek semua
+  akun.
 - Cek login per akun dan rekap status.
 - Konfigurasi di `config.json` (kategori, harga, deskripsi, selector kategori).
 
@@ -114,5 +134,10 @@ omnicaro/
 ## Catatan
 
 - Jalankan hanya untuk akun milik sendiri.
+- Mode **ID → MY** membutuhkan akun/cookie Carousell Malaysia; akun Indonesia
+  tidak akan dipakai untuk posting ke Malaysia (dan sebaliknya).
+- Harga, kondisi, deskripsi, dan delivery diatur **per mode** di halaman
+  Pengaturan. Mode ID → MY memakai deskripsi Melayu dan default RM 10–30.
+- Judul hasil scrape ID tetap berbahasa Indonesia (tidak diterjemahkan).
 - Pola posting terlalu cepat dapat memicu pembatasan akun; atur `upload.delay_min/max`.
 - Bila selector Carousell berubah, sesuaikan `upload.size_search`/`size_leaf` dan selector di `uploader.py`.

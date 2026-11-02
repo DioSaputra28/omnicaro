@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import authcheck, db, queueing, scraper, uploader
-from .settings import JOBS_DIR, load_config
+from .settings import JOBS_DIR, load_config, mode_target
 
 
 def _close_quietly(obj) -> None:
@@ -72,6 +72,15 @@ class JobManager:
     def _is_cancelled(self) -> bool:
         event = self._active_cancel
         return bool(event and event.is_set())
+
+    def _save_session(self, account_id: str, ctx) -> None:
+        """Tulis balik cookie hasil sesi supaya token rotasi tidak hilang."""
+        if ctx is None:
+            return
+        try:
+            db.update_account_cookies(account_id, ctx.storage_state())
+        except Exception:
+            pass
 
     # ---------- internals ----------
 
@@ -140,25 +149,36 @@ class JobManager:
     def _run_scrape(self, params: dict, log) -> str:
         categories = params.get("categories") or []
         limit = max(0, int(params.get("limit", 20)))
+        mode = params.get("mode") or load_config()["mode"]
         if not categories:
             raise ValueError("pilih minimal 1 kategori")
+        log(f"mode: {mode}")
         total = 0
         for cat in categories:
             if self._is_cancelled():
                 log("dibatalkan: sisa kategori tidak diproses")
                 break
-            total += scraper.scrape_category(cat, limit, log)
+            total += scraper.scrape_category(cat, limit, log, mode)
         return f"{total} listing baru"
 
     def _run_upload(self, params: dict, log) -> str:
-        cfg = load_config()
+        mode = params.get("mode") or load_config()["mode"]
+        cfg = load_config(mode)
+        target = mode_target(mode)
         account_id = params.get("account_id", "")
         account = db.get_account(account_id)
         if not account:
             raise ValueError("akun tidak ditemukan")
+        if (account.get("marketplace") or "id") != target:
+            log(f"akun marketplace '{account.get('marketplace') or 'id'}'"
+                f" tidak cocok dengan target '{target}', dilewati")
+            return "marketplace akun tidak cocok, dilewati"
         if account.get("status") == "blocked":
             log("akun ditandai GUGUR (Cloudflare), dilewati")
             return "akun gugur (Cloudflare), dilewati"
+        if not account.get("enabled", 1):
+            log("akun NONAKTIF, dilewati")
+            return "akun nonaktif, dilewati"
         if self._is_cancelled():
             log("dibatalkan sebelum mulai")
             return "dibatalkan"
@@ -172,12 +192,16 @@ class JobManager:
 
     def _run_upload_all(self, params: dict, log) -> str:
         """Posting semua akun berurutan; satu akun gagal tidak menghentikan sisanya."""
-        cfg = load_config()
-        accounts = db.list_accounts()
+        mode = params.get("mode") or load_config()["mode"]
+        cfg = load_config(mode)
+        target = mode_target(mode)
+        accounts = [a for a in db.list_accounts()
+                    if (a.get("marketplace") or "id") == target]
         if not accounts:
-            return "tidak ada akun"
+            return f"tidak ada akun marketplace {target}"
         limit = max(0, int(params.get("limit", 10)))
         quotas = {k: int(v) for k, v in (params.get("quotas") or {}).items()}
+        log(f"mode: {mode} | target: {target}")
         log(f"posting semua akun: {len(accounts)} akun,"
             f" {limit} listing/akun (default)")
         log(f"kategori: {params.get('category') or 'semua kategori'}")
@@ -189,6 +213,10 @@ class JobManager:
                 break
             full = db.get_account(acc["id"])
             if not full:
+                continue
+            if not full.get("enabled", 1):
+                log(f"akun {full['label']}: NONAKTIF, dilewati")
+                skipped += 1
                 continue
             if full.get("status") == "blocked":
                 log(f"akun {full['label']}: GUGUR (Cloudflare), dilewati")
@@ -236,7 +264,16 @@ class JobManager:
         fast = bool(params.get("fast", False))
         rotate = params.get("rotate", "account")   # off | account | listing
         proxy_mode = params.get("proxy", "off")    # off | rotate
-        items = queueing.build(account_id, limit, category)
+        target = mode_target(cfg.get("mode", "my_to_id"))
+        pinned_proxy = (db.get_proxy(account["proxy_id"])
+                        if account.get("proxy_id") else None)
+        if pinned_proxy and not pinned_proxy.get("enabled"):
+            pinned_proxy = None
+        pinned_ua = (db.get_user_agent(account["user_agent_id"])
+                     if account.get("user_agent_id") else None)
+        if pinned_ua and not pinned_ua.get("enabled"):
+            pinned_ua = None
+        items = queueing.build(account_id, limit, category, target)
         if not items:
             return {"posted": 0, "failed": 0, "skipped": "tidak ada listing",
                     "summary": "tidak ada listing untuk diposting"}
@@ -248,15 +285,28 @@ class JobManager:
         from . import browser as bmod
 
         def open_ctx(br):
-            """Context baru + UA/proxy hasil rotasi (None bila dimatikan)."""
-            row = db.next_user_agent() if rotate != "off" else None
-            ua = row["ua"] if row else None
-            proxy = db.next_proxy() if proxy_mode != "off" else None
+            """Context baru + identitas tetap akun atau hasil rotasi."""
+            if pinned_ua:
+                row = db.use_user_agent(pinned_ua["id"]) or pinned_ua
+                ua = row["ua"]
+            else:
+                row = db.next_user_agent() if rotate != "off" else None
+                ua = row["ua"] if row else None
+            if pinned_proxy:
+                proxy = db.use_proxy(pinned_proxy["id"]) or pinned_proxy
+            else:
+                proxy = db.next_proxy() if proxy_mode != "off" else None
             ctx = bmod.new_context(br, account.get("cookies"), ua, proxy)
             return ctx, row, proxy
 
-        log(f"{account['label']}: {len(items)} listing antre")
+        log(f"{account['label']}: {len(items)} listing antre"
+            f" (target {target})")
         log(f"rotasi user agent: {rotate} | proxy: {proxy_mode}")
+        if pinned_ua:
+            log(f"UA tetap: {pinned_ua['label']}")
+        if pinned_proxy:
+            log(f"proxy tetap: {pinned_proxy['label']}"
+                f" ({pinned_proxy['server']})")
         posted = failed = 0
         with sync_playwright() as p:
             br = bmod.launch(p, cfg)
@@ -265,12 +315,14 @@ class JobManager:
                 ctx, ua_row, proxy_row = open_ctx(br)
                 if ua_row:
                     log(f"UA aktif: {ua_row['label']} "
-                        f"(dipakai {ua_row['use_count']}x)")
+                        f"(dipakai {ua_row['use_count']}x)"
+                        + (" [tetap]" if pinned_ua else ""))
                 if proxy_row:
                     log(f"proxy aktif: {proxy_row['label']}"
                         f" ({proxy_row['server']},"
-                        f" dipakai {proxy_row['use_count']}x)")
-                elif proxy_mode != "off":
+                        f" dipakai {proxy_row['use_count']}x)"
+                        + (" [tetap]" if pinned_proxy else ""))
+                elif proxy_mode != "off" and not pinned_proxy:
                     log("tidak ada proxy aktif, lanjut tanpa proxy")
                 page = ctx.new_page()
                 # validasi login memakai page yang sama (tanpa browser kedua)
@@ -290,6 +342,7 @@ class JobManager:
                             "summary": "akun belum login"}
                 db.update_account_status(account_id, "login", who)
                 db.record_login_event(account_id, True, who)
+                self._save_session(account_id, ctx)
                 log(f"login OK: {who or account['label']}")
 
                 import random
@@ -300,7 +353,9 @@ class JobManager:
                     if self._is_cancelled():
                         log("dibatalkan: sisa listing tidak diubah")
                         break
-                    if rotate == "listing" and idx > 0:
+                    if (rotate == "listing" and idx > 0
+                            and not (pinned_ua and pinned_proxy)):
+                        self._save_session(account_id, ctx)
                         _close_quietly(ctx)
                         ctx, ua_row, proxy_row = open_ctx(br)
                         page = ctx.new_page()
@@ -318,7 +373,8 @@ class JobManager:
                     log(f"[{idx+1}/{len(items)}] {item['id']} {item['title'][:50]}")
                     try:
                         status, info = uploader.post_one(page, item, cfg, rng,
-                                                         fast=fast, log=log)
+                                                         fast=fast, log=log,
+                                                         account_id=account_id)
                     except Exception as e:
                         status, info = "error", {"stage": "crash", "err": str(e)[:200]}
                     db.mark_upload(item["id"], account_id, status,
@@ -350,6 +406,7 @@ class JobManager:
                     if idx + 1 < len(items):
                         time.sleep(rng.uniform(delay_min, delay_max))
             finally:
+                self._save_session(account_id, ctx)
                 _close_quietly(ctx)
                 try:
                     br.close()
@@ -391,6 +448,9 @@ class JobManager:
                 break
             full = db.get_account(acc["id"])
             if not full:
+                continue
+            if not full.get("enabled", 1):
+                log(f"{acc['label']}: NONAKTIF, dilewati")
                 continue
             ok, who = authcheck.check(full)
             if ok:
